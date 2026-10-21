@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VEX DR4B & 6-Bar Banding Optimizer | VEX Team 10015Z Zero Tolerance</title>
+  <meta name="author" content="VEX Team 10015Z Zero Tolerance">
+  <meta name="description" content="Physics-based optimal rubber banding for VEX Robotics DR4B, 6-bar, and DR6-4B linkages with 0.5-inch grid locking, custom gear reductions, and hole/inch units.">
+  
+  <!-- Open Graph / Facebook / Discord -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://pgupta9204.github.io/optimal-dr4b/">
+  <meta property="og:title" content="VEX DR4B & 6-Bar Banding Optimizer | VEX Team 10015Z">
+  <meta property="og:description" content="Physics-based optimal rubber banding for VEX Robotics DR4B, 6-bar, and DR6-4B linkages with 0.5-inch grid locking, custom gear reductions, and engineering notebook exports.">
+  <meta property="og:site_name" content="VEX Team 10015Z Zero Tolerance">
+
+  <!-- Twitter / X -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:url" content="https://pgupta9204.github.io/optimal-dr4b/">
+  <meta name="twitter:title" content="VEX DR4B & 6-Bar Banding Optimizer">
+  <meta name="twitter:description" content="Physics-based optimal rubber banding for VEX Robotics DR4B, 6-bar, and DR6-4B linkages.">
+
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- Header -->
+  <header>
+    <div class="logo-area">
+      <div class="logo-badge">VEX KINEMATICS</div>
+      <div>
+        <h1>DR4B & 6-Bar Banding Optimizer</h1>
+        <div class="header-affiliation">
+          <span class="team-badge-sm">TEAM 10015Z</span>
+          <span class="team-sub">Zero Tolerance</span>
+          <span class="header-divider">•</span>
+          <span class="header-tag">0.5" Grid-Locked</span>
+        </div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div class="unit-toggle" id="unitToggle" title="Toggle between distance in inches or VEX hole count (holes = in × 2 + 1)">
+        <button class="unit-btn active" data-unit="in">Inches (in)</button>
+        <button class="unit-btn" data-unit="holes">VEX Holes (#)</button>
+      </div>
+      <button class="btn btn-outline btn-sm" id="btnTheoryModal">📖 Theory & Guide</button>
+      <button class="btn btn-outline btn-sm" id="btnCopyNotebook">📋 Copy Notebook</button>
+      <button class="btn btn-primary btn-sm" id="btnShareURL">🔗 Share Config</button>
+    </div>
+  </header>
+
+  <!-- App Container -->
+  <div class="app-container">
+    <!-- Left Sidebar: Settings & Controls -->
+    <aside class="sidebar">
+      <!-- Presets -->
+      <div class="sidebar-section">
+        <h2>Linkage Presets</h2>
+        <div class="form-group">
+          <select id="presetSelect">
+            <option value="dr64">Compact DR6-4B (Bottom 6-Bar + Top 4-Bar)</option>
+            <option value="dr4b">Standard DR4B (Double Reverse 4-Bar - 14")</option>
+            <option value="dr6b">Full DR6B (Double Reverse 6-Bar)</option>
+            <option value="single6b">Single 6-Bar (8" + 7" Arms)</option>
+            <option value="single4b">Single 4-Bar (15" Arm)</option>
+            <option value="high_dr4b">High-Reach DR4B (17.5" Arms)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Stage 1 Architecture -->
+      <div class="sidebar-section">
+        <h2>Stage 1 (Bottom Stage)</h2>
+        <div class="form-group">
+          <label>Linkage Type</label>
+          <select id="s1_type">
+            <option value="6bar">6-Bar (Compact Dual Parallel)</option>
+            <option value="4bar">4-Bar (Standard Parallelogram)</option>
+          </select>
+        </div>
+
+        <!-- 4-Bar Inputs -->
+        <div id="s1_4bar_inputs" class="form-row" style="display:none;">
+          <div>
+            <label>Bar Length <span class="unit dim-unit">(in)</span></label>
+            <input type="number" id="s1_4b_L" step="0.5" min="5" max="35" value="14">
+          </div>
+          <div>
+            <label>Pivot Spacing <span class="unit dim-unit">(in)</span></label>
+            <input type="number" id="s1_4b_s" step="0.5" min="1" max="10" value="3.0">
+          </div>
+        </div>
+
+        <!-- 6-Bar Inputs -->
+        <div id="s1_6bar_inputs" class="form-row">
+          <div>
+            <label>Arm 1 Length L1 <span class="unit dim-unit">(in)</span></label>
+            <input type="number" id="s1_6b_L1" step="0.5" min="4" max="25" value="7.0">
+          </div>
+          <div>
+            <label>Arm 2 Length L2 <span class="unit dim-unit">(in)</span></label>
+            <input type="number" id="s1_6b_L2" step="0.5" min="4" max="25" value="7.0">
+          </div>
+          <div>
+            <label>Base Spacing s1 <span class="unit dim-unit">(in)</span></label>
+            <input type="number" id="s1_6b_s1" step="0.5" min="1" max="8" value="2.5">
+          </div>
+          <div>
+            <label>Mid Spacing s2 <span class="unit dim-unit">(in)</span></label>
+            <input type="number" id="s1_6b_s2" step="0.5" min="1" max="8" value="2.5">
+          </div>
+        </div>
+      </div>
+
+      <!-- Stage 2 Architecture -->
+      <div class="sidebar-section">
+        <h2>Stage 2 (Reverse Top Stage)</h2>
+        <div class="form-group">
+          <label>Stage 2 Linkage</label>
+          <select id="s2_type">
+            <option value="4bar">4-Bar Reverse</option>
+            <option value="6bar">6-Bar Reverse</option>
+            <option value="none">None (Single Stage)</option>
+          </select>
+        </div>
+
+        <div id="s2_inputs" class="form-row-3">
+          <div>
+            <label>Arm Length <span class="unit dim-unit">(in)</span></label>
+            <input type="number" id="s2_L" step="0.5" min="5" max="35" value="14">
+          </div>
+          <div>
+            <label>Pivot Spacing <span class="unit dim-unit">(in)</span></label>
+            <input type="number" id="s2_s" step="0.5" min="1" max="8" value="3.0">
+          </div>
+          <div>
+            <label>Tower Offset h <span class="unit dim-unit">(in)</span></label>
+            <input type="number" id="s2_h" step="0.5" min="1" max="12" value="4.5">
+          </div>
+        </div>
+      </div>
+
+      <!-- Angular Limits & Motion -->
+      <div class="sidebar-section">
+        <h2>Motion Limits</h2>
+        <div class="form-row">
+          <div>
+            <label>Min Angle <span class="unit">(deg)</span></label>
+            <input type="number" id="thetaMin" step="5" min="-45" max="10" value="-25">
+          </div>
+          <div>
+            <label>Max Angle <span class="unit">(deg)</span></label>
+            <input type="number" id="thetaMax" step="5" min="20" max="85" value="65">
+          </div>
+        </div>
+      </div>
+
+      <!-- Mass, Payload & Motor Specs -->
+      <div class="sidebar-section">
+        <h2>Mass & V5 Motors</h2>
+        <div class="form-row">
+          <div>
+            <label>Intake / End Effector <span class="unit">(lbs)</span></label>
+            <input type="number" id="mass_endEffector" step="0.1" min="0" max="10" value="2.2">
+          </div>
+          <div>
+            <label>Game Piece Payload <span class="unit">(lbs)</span></label>
+            <input type="number" id="mass_payload" step="0.1" min="0" max="10" value="0.5">
+          </div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label>Mid Tower Mass <span class="unit">(lbs)</span></label>
+            <input type="number" id="mass_middleTower" step="0.05" min="0" max="3" value="0.45">
+          </div>
+          <div>
+            <label>Mechanism Sides</label>
+            <select id="mass_sides">
+              <option value="2">2 Sides (Standard)</option>
+              <option value="1">1 Side (Single)</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>C-Channel Metal</label>
+          <select id="mat_density">
+            <option value="0.0075">Aluminum (0.0075 lb/in)</option>
+            <option value="0.022">Steel (0.022 lb/in)</option>
+          </select>
+        </div>
+
+        <div class="form-row">
+          <div>
+            <label>V5 Motor Count</label>
+            <select id="motor_count">
+              <option value="2">2 Motors</option>
+              <option value="1">1 Motor</option>
+              <option value="4">4 Motors</option>
+            </select>
+          </div>
+          <div>
+            <label>Cartridge (Gearbox)</label>
+            <select id="motor_cartridge">
+              <option value="200">200 RPM (Green)</option>
+              <option value="100">100 RPM (Red)</option>
+              <option value="600">600 RPM (Blue)</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label>External Gear Ratio</label>
+            <select id="motor_ratio">
+              <option value="5.0">1:5 (12T to 60T)</option>
+              <option value="7.0">1:7 (12T to 84T)</option>
+              <option value="3.0">1:3 (12T to 36T)</option>
+              <option value="2.333">3:7 (36T to 84T)</option>
+              <option value="1.0">1:1 Direct</option>
+              <option value="15.0">1:15 Compound (12:60 + 12:36)</option>
+              <option value="21.0">1:21 Compound (12:84 + 12:36)</option>
+              <option value="custom">Custom Reduction...</option>
+            </select>
+          </div>
+          <div>
+            <label>Drive Location</label>
+            <select id="motor_location">
+              <option value="middle">Middle Tower (Standard)</option>
+              <option value="base">Base Tower</option>
+            </select>
+          </div>
+        </div>
+        <div id="custom_ratio_container" style="display:none;margin-top:6px;">
+          <label style="font-size:11px;display:flex;justify-content:space-between;align-items:center;">
+            <span>Custom Ratio / Reduction</span>
+            <span id="custom_ratio_display" style="color:#38bdf8;font-family:ui-monospace,monospace;font-weight:700;font-size:11px;">1:5.0 (5.0×)</span>
+          </label>
+          <input type="text" id="custom_motor_ratio" placeholder="e.g. 1:15, 3:7, 12:60 * 12:36, or 5.0" value="1:5" style="width:100%;margin-top:2px;">
+        </div>
+      </div>
+
+      <!-- Rubber Band Specs & Group Editor -->
+      <div class="sidebar-section">
+        <h2>Rubber Bands & Hardware</h2>
+        <div class="form-row">
+          <div>
+            <label>Band Size</label>
+            <select id="band_type">
+              <option value="64">#64 (3.5" × 1/4")</option>
+              <option value="32">#32 (3.0" × 1/8")</option>
+            </select>
+          </div>
+          <div>
+            <label>Standoff Outer Dia</label>
+            <select id="standoff_dia">
+              <option value="0.25">0.25" (Standard)</option>
+              <option value="0.375">0.375" (Spacer/Roller)</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;margin:12px 0 6px;">
+          <h3 style="font-size:11px;text-transform:uppercase;color:var(--text-muted);font-weight:700;">Band Groups</h3>
+          <button class="btn btn-outline btn-sm" id="btnAddGroup">+ Add Group</button>
+        </div>
+        <div id="bandGroupsContainer"></div>
+      </div>
+
+      <!-- Auto-Optimizer Section -->
+      <div class="sidebar-section">
+        <h2>Auto-Optimizer</h2>
+        <div class="form-row">
+          <div>
+            <label>Optimization Goal</label>
+            <select id="opt_objective">
+              <option value="balanced">Balanced (Full Stroke)</option>
+              <option value="bottom">Bottom Assist (Pickup)</option>
+              <option value="top">Top Assist (Scoring)</option>
+            </select>
+          </div>
+          <div>
+            <label>Compute Budget</label>
+            <select id="opt_time">
+              <option value="2500">2.5s (Standard)</option>
+              <option value="1500">1.5s (Fast)</option>
+              <option value="5000">5.0s (Deep Search)</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label>Max Bands / Side</label>
+            <input type="number" id="opt_maxBands" min="1" max="16" value="10">
+          </div>
+          <div>
+            <label>Max Wraps</label>
+            <select id="opt_maxWraps">
+              <option value="2">2× Doubled</option>
+              <option value="1">1× Single only</option>
+              <option value="3">3× Tripled</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="checkbox" id="opt_avoidCross" checked> Avoid Bar Crossing & Interference
+          </label>
+        </div>
+
+        <button class="btn btn-accent btn-block" id="btnRunOptimizer" style="margin-top:8px;">
+          🚀 RUN OPTIMIZER
+        </button>
+
+        <div id="optimizerProgress" style="display:none;margin-top:10px;">
+          <div class="progress-container">
+            <div class="progress-bar" id="optimizerProgressBar"></div>
+          </div>
+          <div id="optimizerStatus" style="font-size:10px;color:var(--text-muted);margin-top:4px;font-family:ui-monospace,monospace;"></div>
+        </div>
+
+        <div id="candidateList" style="margin-top:10px;"></div>
+      </div>
+
+      <div class="sidebar-footer">
+        <div>Engineered by <strong>VEX Team 10015Z</strong> Zero Tolerance</div>
+        <div style="margin-top:6px;display:flex;gap:6px;font-size:10px;justify-content:center;align-items:center;">
+          <a href="https://github.com/pgupta9204/optimal-dr4b" target="_blank" style="color:var(--text-muted);text-decoration:none;">GitHub</a>
+          <span>•</span>
+          <button id="btnPrivacyModal" style="background:none;border:none;color:var(--text-muted);cursor:pointer;padding:0;font-size:10px;text-decoration:underline;">Privacy & Disclaimers</button>
+          <span>•</span>
+          <span style="color:var(--text-muted);">MIT</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Center Viewport (Interactive 2D Canvas) -->
+    <main class="center-viewport">
+      <!-- Toolbar Overlay -->
+      <div class="canvas-toolbar">
+        <div class="tool-chip active" data-opt="halfCut" title="Constrain banding to 1-hole half-cut centerlines (no Y-offset on bars)">Half-Cut Skeleton</div>
+        <div class="tool-chip active" data-opt="showSkeletonLines" title="Display CAD dash-dot construction centerlines">Skeleton Lines</div>
+        <div class="tool-chip active" data-opt="showGears" title="Display middle tower synchronization gears">Sync Gears</div>
+        <div class="tool-chip active" data-opt="showHoles" title="Show 0.5&quot; pitch mounting holes">0.5" Holes</div>
+        <div class="tool-chip active" data-opt="showCoM" title="Show Center of Mass">CoM</div>
+        <div class="tool-chip active" data-opt="showDimensions" title="Show Height readout">Height</div>
+        <div class="tool-chip active" data-opt="showGrid" title="Show ground grid">Ground</div>
+      </div>
+
+      <div class="canvas-toolbar-right">
+        <button class="btn btn-outline btn-sm" id="btnResetView">⛶ Fit View</button>
+      </div>
+
+      <!-- Main Canvas -->
+      <canvas id="liftCanvas"></canvas>
+
+      <!-- Scrubber & Playback Controls -->
+      <div class="scrubber-bar">
+        <div class="playback-controls">
+          <button class="btn btn-outline btn-sm" id="btnStepBack" title="Step -2°">◀</button>
+          <button class="btn btn-outline btn-sm" id="btnPlay" title="Play/Pause">▶</button>
+          <button class="btn btn-outline btn-sm" id="btnStepFwd" title="Step +2°">▶</button>
+        </div>
+        <div class="scrubber-slider-container">
+          <label style="margin:0;font-size:11px;">Lift Angle (θ):</label>
+          <input type="range" id="angleSlider" min="-25" max="65" value="15" step="0.5">
+          <div class="angle-badge" id="angleDisplay">15°</div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Right Side Analytics Pane -->
+    <aside class="analytics-pane">
+      <nav class="tabs-nav">
+        <button class="tab-btn active" data-tab="tabAnalytics">Torque & Motors</button>
+        <button class="tab-btn" data-tab="tabBuild">VEX Build Sheet</button>
+      </nav>
+
+      <!-- Tab 1: Analytics -->
+      <div class="tab-content active" id="tabAnalytics">
+        <!-- Quick Metrics -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-title">PEAK NET TORQUE</div>
+            <div class="metric-value" id="valPeakTorque">—</div>
+            <div class="metric-sub" id="valPeakTorqueSub">—</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-title">MOTOR LOAD @ CURRENT θ</div>
+            <div class="metric-value" id="valMotorLoad">—</div>
+            <div class="metric-sub" id="valMotorLoadSub">—</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-title">BAND STRETCH (λ)</div>
+            <div class="metric-value" id="valStretch">—</div>
+            <div class="metric-sub" id="valStretchSub">—</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-title">TOTAL RUBBER BANDS</div>
+            <div class="metric-value" id="valTotalBands">—</div>
+            <div class="metric-sub" id="valTotalBandsSub">—</div>
+          </div>
+        </div>
+
+        <!-- Chart 1: Net Drive Torque -->
+        <div class="chart-box">
+          <div class="chart-header">
+            <div class="chart-title">TORQUE BALANCE vs LIFT ANGLE</div>
+          </div>
+          <canvas class="chart-canvas" id="chartTorque"></canvas>
+        </div>
+
+        <!-- Chart 2: Motor Stall % -->
+        <div class="chart-box">
+          <div class="chart-header">
+            <div class="chart-title">V5 MOTOR LOAD (% OF STALL)</div>
+          </div>
+          <canvas class="chart-canvas" id="chartMotor"></canvas>
+        </div>
+
+        <!-- Chart 3: Stretch Ratio -->
+        <div class="chart-box">
+          <div class="chart-header">
+            <div class="chart-title">BAND ELONGATION RATIO (λ)</div>
+          </div>
+          <canvas class="chart-canvas" id="chartStretch"></canvas>
+        </div>
+
+        <!-- Chart 4: Height -->
+        <div class="chart-box">
+          <div class="chart-header">
+            <div class="chart-title">CARRIAGE VERTICAL HEIGHT</div>
+          </div>
+          <canvas class="chart-canvas" id="chartHeight"></canvas>
+        </div>
+      </div>
+
+      <!-- Tab 2: VEX Build Sheet -->
+      <div class="tab-content" id="tabBuild">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div>
+            <div style="font-size:10px;font-weight:700;color:#f59e0b;letter-spacing:0.5px;">VEX TEAM 10015Z • ZERO TOLERANCE</div>
+            <h3 style="font-size:12px;text-transform:uppercase;color:#fff;font-weight:700;margin:1px 0 0;">Pit Assembly Instructions</h3>
+          </div>
+          <button class="btn btn-primary btn-sm" id="btnCopyBuildSheet">📋 Copy Sheet</button>
+        </div>
+        <p style="font-size:11px;color:var(--text-muted);margin-top:4px;">
+          All standoff posts are strictly locked to the 0.5" VEX hole pitch (<code>holes = in × 2 + 1</code>). Mount standoffs into the indicated holes using #8-32 screws, bearing flats, or nylon spacers.
+        </p>
+        <div id="buildSheetList"></div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Theory & Physics Modal -->
+  <div class="modal-overlay" id="theoryModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 style="font-size:15px;color:#fff;font-weight:700;">Mechanics of VEX Triangle Rubber Banding</h2>
+        <button class="btn btn-outline btn-sm" id="btnCloseTheory">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="team-banner">
+          <div class="team-badge-lg">TEAM 10015Z</div>
+          <div>
+            <div style="font-weight:700;color:#fff;font-size:13px;">VEX Team 10015Z — Zero Tolerance</div>
+            <div style="font-size:11px;color:var(--text-muted);">Developed for competitive VEX teams seeking optimal rubber band assistance and minimal motor stall load.</div>
+          </div>
+        </div>
+
+        <h3>1. Why Triangle Banding Instead of Linear Banding?</h3>
+        <p>
+          On any parallelogram lift (4-bar or 6-bar), gravity exerts a torque proportional to <code>cos(θ)</code>:
+          the lift feels heaviest when horizontal (<code>θ = 0°</code> or negative), and lighter when fully extended upright (<code>θ = 65°</code>).
+        </p>
+        <p>
+          A standard linear rubber band (attached between two points) has a stretch distance that changes almost linearly with angle,
+          often producing too much tension when raised or not enough when folded flat.
+        </p>
+        <p>
+          <strong>Triangle banding</strong> routes a closed loop of rubber bands around three posts (e.g. two on the upper arm / tower and one on the lower arm).
+          Because of the triangle inequality and angle change, the triangle's perimeter <code>P(θ)</code> decreases rapidly as the arms open,
+          creating a large rate of change <code>dP/dθ</code> near the bottom and tapering off near the top. By tuning the 3 post coordinates,
+          the virtual-work torque <code>τ_band(θ) = T(λ) · dP/dθ</code> matches <code>-τ_gravity(θ)</code> almost perfectly across the entire range!
+        </p>
+
+        <h3>2. Why Replace the Bottom Stage with a 6-Bar (DR6-4B)?</h3>
+        <p>
+          In VEX Robotics, sizing constraints (18" × 18" × 18") restrict how long individual C-channels can be.
+          A 6-bar replaces the single long stage with two linked stages (a short lower arm, a middle floating vertical link, and an upper arm).
+        </p>
+        <ul>
+          <li><strong>Greater Vertical Reach:</strong> Reaches higher than a 4-bar with the same starting horizontal footprint.</li>
+          <li><strong>Compact Stowed Packaging:</strong> Folds into a very low starting height while clearing internal mechanisms (like mobile goal intakes or catapults).</li>
+          <li><strong>More Attachment Locations:</strong> The 6-bar's middle floating link moves relative to both the tower and the arms, providing ideal mounting posts for triangle banding.</li>
+        </ul>
+
+        <h3>3. VEX Build Tips for Rubber Bands</h3>
+        <ul>
+          <li><strong>Standoff Spacers:</strong> Use smooth nylon spacers or 3/8" aluminum rollers over #8-32 standoffs so bands can slide freely around the triangle vertices without pinching.</li>
+          <li><strong>Screw Joints & Clearances:</strong> Always build lift pivots with high-strength shoulder bolts or #8-32 screw joints with Nyloc nuts and Delrin bearing flats. Standoff posts are strictly constrained to be at least 2 holes away (&ge; 1.0") from any pivot to avoid conflicting with bearing flat mounting screws, gear bolt circles, and synchronization gears.</li>
+          <li><strong>Band Pre-Stretch:</strong> Keep initial stretch <code>λ_min ≥ 1.15×</code> so bands don't go slack or derail off the standoffs when the lift is at the top of its stroke.</li>
+        </ul>
+
+        <h3>4. VEX Hole Pitch & Measurement System</h3>
+        <p>
+          VEX structural C-channels feature square holes spaced at exactly <code>0.5"</code> on-center pitch. When counting holes, a distance of <code>0.5"</code> covers 2 holes, <code>1.0"</code> covers 3 holes, and so forth:
+        </p>
+        <div style="background:#090d14;border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:ui-monospace,monospace;font-size:11px;margin:8px 0;color:#38bdf8;">
+          holes = inches × 2 + 1 &nbsp;&nbsp;⟺&nbsp;&nbsp; inches = (holes - 1) × 0.5
+        </div>
+        <p>
+          Use the <strong>Inches / Holes</strong> switcher in the top bar to freely toggle all linkage dimensions and post positions between fractional inches and integer hole counts.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Privacy & Disclaimers Modal -->
+  <div class="modal-overlay" id="privacyModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 style="font-size:15px;color:#fff;font-weight:700;">Privacy, Data & Legal Disclaimers</h2>
+        <button class="btn btn-outline btn-sm" id="btnClosePrivacy">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="team-banner">
+          <div class="team-badge-lg" style="background:#059669;">PRIVACY</div>
+          <div>
+            <div style="font-weight:700;color:#fff;font-size:13px;">100% Zero-Cookie & COPPA Compliant</div>
+            <div style="font-size:11px;color:var(--text-muted);">Safe for middle school, high school, and student robotics teams. Zero PII collected.</div>
+          </div>
+        </div>
+
+        <h3>1. Zero Tracking Cookies</h3>
+        <p>This application does not use, set, or read any tracking cookies (<code>document.cookie</code> is never used). No cookie banners or popups are needed because zero tracking cookies exist.</p>
+
+        <h3>2. 100% Client-Side Physics Isolation</h3>
+        <p>All kinematics calculations, simulated annealing optimizations, and Engineering Notebook report generations run entirely locally in your browser sandbox. Your robot CAD parameters, custom arm dimensions, and team mechanism designs never leave your computer.</p>
+
+        <h3>3. Anonymous Impact Metrics</h3>
+        <p>To evaluate solver performance and measure community impact, we record coarse, anonymous events (e.g. preset selected, optimizer solved, notebook markdown exported). We never collect names, email addresses, IP addresses, or student information.</p>
+
+        <h3>4. Automated Privacy Respect (DNT & GPC)</h3>
+        <p>If your browser transmits a <code>Do Not Track</code> (DNT) or <code>Global Privacy Control</code> (GPC) signal, all telemetry is completely disabled automatically.</p>
+
+        <h3>5. Trademark Attribution & Disclaimers</h3>
+        <p style="font-size:11px;color:var(--text-muted);margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
+          <em>VEX</em> and <em>VEX Robotics</em> are registered trademarks of Innovation First International, Inc. This project is an independent educational tool developed by VEX Team 10015Z Zero Tolerance and is not affiliated with, sponsored by, or endorsed by Innovation First International or the Robotics Education & Competition Foundation (RECF).
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="js/analytics.js"></script>
+  <script src="js/physics.js"></script>
+  <script src="js/optimizer.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/renderer.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
