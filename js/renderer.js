@@ -467,6 +467,8 @@
       ];
 
       ctx.save();
+      // Render synchronization gears with translucent CAD overlay so C-channel holes and standoffs remain visible
+      ctx.globalAlpha = 0.40;
       for (let i = 0; i < 2; i++) {
         const c = centers[i];
         const [cx, cy] = this.worldToScreen(c[0], c[1]);

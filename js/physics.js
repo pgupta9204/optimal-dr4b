@@ -277,23 +277,15 @@
    * true if coordinate (a,b) cannot be used for rubber band standoff posts:
    * 1. Axle / screwjoint pivot hole (dist == 0)
    * 2. 1 hole away (dist <= 0.5"), occupied by gear mounting bolts or bearing flat screws
-   * 3. Middle tower synchronization gear mesh envelope
+   *
+   * Posts with >= 1.0" clearance (2+ holes away) from every pivot are permitted,
+   * including structural upright sections between stages (e.g. middle tower).
    */
   function isPivot(link, a, b, eps = 0.75) {
     if (!link) return false;
     if (link.pivots) {
       for (const p of link.pivots) {
         if (Math.hypot(a - p[0], b - p[1]) <= eps) return true;
-      }
-      // Middle tower synchronization gear envelope
-      if (link.name === 'Middle tower' && link.pivots.length >= 4) {
-        const y1 = link.pivots[1][1];
-        const y2 = link.pivots[2][1];
-        const dy = y2 - y1;
-        if (dy > 0.4) {
-          const rGear = dy / 2 + 0.15;
-          if (b >= y1 - rGear - 1e-4 && b <= y2 + rGear + 1e-4) return true;
-        }
       }
     }
     return false;

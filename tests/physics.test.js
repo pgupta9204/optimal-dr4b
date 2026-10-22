@@ -225,5 +225,29 @@ for (const s1 of [{ type: '4bar', L: 14, s: 3 }, { type: '6bar', L1: 7, L2: 7, s
   check('parseReduction("8.5") == 8.5', near(LP.parseReduction('8.5'), 8.5, 1e-4));
 }
 
+// 9) Middle Tower structural placement between pivots (1in / 2+ holes clearance from pivots)
+{
+  const cfg = {
+    stage1: { type: '6bar', L1: 9, L2: 5, s1: 4.5, s2: 4.5 },
+    stage2: { type: '4bar', L: 14, s: 2, h: 7 },
+    mass: { barDensity: 0.0075, overhang: 0.5, sides: 2, middleTower: 0.45, midLink: 0.12, endEffector: 2.2, payload: 0.5 }
+  };
+  const m = LP.buildModel(cfg);
+  const midTower = m.links.find((l) => l.name === 'Middle tower');
+
+  // Pivots are at b=0.0, 4.5, 7.0, 9.0
+  check('midTower b=4.5 is pivot (forbidden)', LP.isPivot(midTower, 0, 4.5));
+  check('midTower b=5.0 is 1 hole away (forbidden)', LP.isPivot(midTower, 0, 5.0));
+  check('midTower b=5.5 is 1.0" away from b=4.5 (ALLOWED)', !LP.isPivot(midTower, 0, 5.5));
+  check('midTower b=6.0 is 1.0" away from b=7.0 (ALLOWED)', !LP.isPivot(midTower, 0, 6.0));
+  check('midTower b=6.5 is 1 hole away (forbidden)', LP.isPivot(midTower, 0, 6.5));
+  check('midTower b=7.0 is pivot (forbidden)', LP.isPivot(midTower, 0, 7.0));
+
+  const [snapA, snapB] = LP.nearestNonPivot(midTower, 0, 6.0, { halfCut: true });
+  check('nearestNonPivot preserves b=6.0 on middle tower', snapA === 0 && snapB === 6.0, `snapped to ${snapA}, ${snapB}`);
+  const [snap5A, snap5B] = LP.nearestNonPivot(midTower, 0, 5.5, { halfCut: true });
+  check('nearestNonPivot preserves b=5.5 on middle tower', snap5A === 0 && snap5B === 5.5, `snapped to ${snap5A}, ${snap5B}`);
+}
+
 console.log(fails ? `\n${fails} FAILED` : '\nall tests passed');
 process.exit(fails ? 1 : 0);
