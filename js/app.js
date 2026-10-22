@@ -923,15 +923,15 @@
     const timeBudgetMs = parseInt(document.getElementById('opt_time').value) || 2500;
     const objective = document.getElementById('opt_objective').value;
     const avoidCross = document.getElementById('opt_avoidCross').checked;
-    const maxBands = parseInt(document.getElementById('opt_maxBands').value) || 12;
+    const maxBands = parseInt(document.getElementById('opt_maxBands').value) || 10;
     const maxWraps = parseInt(document.getElementById('opt_maxWraps').value) || 2;
 
     const isHalfCut = renderer.options.halfCut !== false;
     const opts = {
       K: 40,
       designFrac: 0.5,
-      bias: objective === 'bottom' ? 0.25 : objective === 'top' ? -0.2 : 0.0,
-      objective: 'balanced',
+      objective: objective,
+      bias: 0.0,
       lamMax: 4.0,
       lamMin: 1.15,
       requireTension: true,
@@ -962,7 +962,10 @@
       stage2: currentConfig.stage2.type,
       halfCut: isHalfCut,
       budgetMs: timeBudgetMs,
-      objective: objective
+      objective: objective,
+      maxBands: maxBands,
+      maxWraps: maxWraps,
+      avoidCross: avoidCross
     });
 
     btnRunOptimizer.textContent = '⏹ CANCEL OPTIMIZER';
@@ -972,7 +975,7 @@
     candidateList.innerHTML = '';
 
     const initial = bandGroups.filter((g) => !g.locked).map((g) => ({
-      n: g.n,
+      n: Math.min(g.n, maxWraps),
       pts: g.pts.map((p) => ({ li: p.link, ia: Math.round(p.a / LP.GRID), ib: Math.round(p.b / LP.GRID) }))
     }));
 
@@ -993,8 +996,17 @@
 
         if (res.results && res.results.length > 0) {
           const best = res.results[0];
-          const maxG = Math.max(...best.ev.gDesign.map(Math.abs));
-          const maxNet = Math.max(...best.ev.netDesign.map(Math.abs));
+          // Construct candidate band groups combining locked groups and best result
+          const candidateBandGroups = bandGroups.map((g, gi) => {
+            const found = best.groups.find((bg) => bg.gi === gi);
+            if (found) {
+              return { ...g, n: found.n, m: found.m, pts: found.pts.map((p) => ({ ...p })) };
+            }
+            return g;
+          });
+          const ev = LP.evaluate(model, candidateBandGroups, bandPreset, opts, 41);
+          const maxG = Math.max(...ev.gDesign.map(Math.abs));
+          const maxNet = Math.max(...ev.netDesign.map(Math.abs));
           const redPct = maxG > 0 ? ((1 - maxNet / maxG) * 100) : 0;
           trackEvent('optimizer_completed', {
             stage1: currentConfig.stage1.type,
@@ -1005,7 +1017,7 @@
             candidates_found: res.results.length
           });
           displayCandidates(res.results);
-          // Apply best
+          // Apply best immediately
           applyCandidate(res.results[0]);
         } else {
           optimizerStatus.textContent = 'No feasible solution found with current constraints.';
@@ -1025,19 +1037,30 @@
   function displayCandidates(results) {
     candidateList.innerHTML = '<div style="font-size:11px;font-weight:700;color:#94a3b8;margin-bottom:6px;">TOP GRID-SNAPPED DESIGNS:</div>';
 
+    const presetName = bandPreset.label ? bandPreset.label.split(' ')[0] : '#64';
+
     results.forEach((cand, idx) => {
       const card = document.createElement('div');
       card.className = 'candidate-card' + (idx === 0 ? ' selected' : '');
 
-      let bandSummary = '';
+      let totalM = 0;
+      const parts = [];
       cand.groups.forEach((g) => {
-        bandSummary += `G: ${g.m}× (#64) ${g.n > 1 ? `${g.n}w ` : ''}`;
+        totalM += g.m;
+        parts.push(`G${g.gi + 1}: ${g.m}×${g.n > 1 ? ` (${g.n}w)` : ''}`);
       });
+      bandGroups.forEach((lg, lgi) => {
+        if (lg.locked) {
+          totalM += lg.m;
+          parts.push(`G${lgi + 1}(🔒): ${lg.m}×`);
+        }
+      });
+      const bandSummary = parts.join(' | ');
 
       card.innerHTML = `
         <div>
           <div style="font-weight:700;color:#fff;font-size:12px;">#${idx + 1} Best Fit <span style="color:#38bdf8;font-size:10px;">(Score: ${(1 - cand.fit).toFixed(2)})</span></div>
-          <div style="font-size:10px;color:#94a3b8;">${bandSummary} | λ: ${cand.lamMin.toFixed(2)}–${cand.lamMax.toFixed(2)}</div>
+          <div style="font-size:10px;color:#94a3b8;">${bandSummary} (${presetName}) | Total: ${totalM}/side | λ: ${cand.lamMin.toFixed(2)}–${cand.lamMax.toFixed(2)}</div>
         </div>
         <button class="btn btn-outline btn-sm">Apply</button>
       `;
@@ -1219,6 +1242,13 @@
       bands: bandGroups,
       motors: motorConfig,
       unit: currentUnit,
+      optimizer: {
+        objective: document.getElementById('opt_objective') ? document.getElementById('opt_objective').value : 'balanced',
+        time: parseInt(document.getElementById('opt_time') ? document.getElementById('opt_time').value : 2500) || 2500,
+        maxBands: parseInt(document.getElementById('opt_maxBands') ? document.getElementById('opt_maxBands').value : 10) || 10,
+        maxWraps: parseInt(document.getElementById('opt_maxWraps') ? document.getElementById('opt_maxWraps').value : 2) || 2,
+        avoidCross: document.getElementById('opt_avoidCross') ? document.getElementById('opt_avoidCross').checked : true,
+      },
     };
     const b64 = btoa(JSON.stringify(payload));
     window.location.hash = b64;
@@ -1248,6 +1278,28 @@
         document.querySelectorAll('.dim-unit').forEach((el) => {
           el.textContent = currentUnit === 'holes' ? '(holes)' : '(in)';
         });
+      }
+      if (data.optimizer) {
+        if (data.optimizer.objective) {
+          const el = document.getElementById('opt_objective');
+          if (el) el.value = data.optimizer.objective;
+        }
+        if (data.optimizer.time) {
+          const el = document.getElementById('opt_time');
+          if (el) el.value = String(data.optimizer.time);
+        }
+        if (data.optimizer.maxBands) {
+          const el = document.getElementById('opt_maxBands');
+          if (el) el.value = data.optimizer.maxBands;
+        }
+        if (data.optimizer.maxWraps) {
+          const el = document.getElementById('opt_maxWraps');
+          if (el) el.value = String(data.optimizer.maxWraps);
+        }
+        if (data.optimizer.avoidCross !== undefined) {
+          const el = document.getElementById('opt_avoidCross');
+          if (el) el.checked = !!data.optimizer.avoidCross;
+        }
       }
       if (motorConfig.isCustom) {
         const ratioSelect = document.getElementById('motor_ratio');

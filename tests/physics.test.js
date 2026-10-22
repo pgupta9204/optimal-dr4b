@@ -249,5 +249,79 @@ for (const s1 of [{ type: '4bar', L: 14, s: 3 }, { type: '6bar', L1: 7, L2: 7, s
   check('nearestNonPivot preserves b=5.5 on middle tower', snap5A === 0 && snap5B === 5.5, `snapped to ${snap5A}, ${snap5B}`);
 }
 
+// 10) Auto-Optimizer parameter adherence (maxWraps, maxBands, objectives, locked groups)
+{
+  const cfg = {
+    stage1: { type: '4bar', L: 14, s: 3 },
+    stage2: { type: '4bar', L: 14, s: 3, h: 4.5 },
+    thetaMin: -30, thetaMax: 60,
+    mass: { barDensity: 0.0075, overhang: 0.5, sides: 2, middleTower: 0.45, midLink: 0.12, endEffector: 2.2, payload: 0.5 }
+  };
+  const m = LP.buildModel(cfg);
+  const band = { ...LP.BAND_PRESETS['64'], postD: 0.25 };
+  const st1 = m.links.filter((l) => l.stage <= 1 || l.name === 'Middle tower').map((l) => l.idx);
+  const st2 = m.links.filter((l) => l.stage === 2 || l.name === 'Middle tower').map((l) => l.idx);
+
+  // A: maxWraps = 1 constraint
+  {
+    const groups = [
+      { type: 'tri', locked: false, allowed: st1, n: 1, m: 1, pts: [] },
+      { type: 'tri', locked: false, allowed: st2, n: 1, m: 1, pts: [] }
+    ];
+    const ctx = LO.createContext(m, groups, band, { maxWraps: 1, maxBands: 10, objective: 'balanced' });
+    const res = LO.runSync(ctx, { timeBudgetMs: 800, seed: 10 });
+    check('optimizer returns valid candidates under maxWraps=1', res.results.length > 0);
+    const allSingle = res.results.every((r) => r.groups.every((g) => g.n === 1));
+    check('all candidate groups strictly respect maxWraps=1 (n=1)', allSingle);
+  }
+
+  // B: maxBands = 6 constraint (sum of bands across all groups <= 6)
+  {
+    const groups = [
+      { type: 'tri', locked: false, allowed: st1, n: 1, m: 1, pts: [] },
+      { type: 'tri', locked: false, allowed: st2, n: 1, m: 1, pts: [] }
+    ];
+    const ctx = LO.createContext(m, groups, band, { maxWraps: 2, maxBands: 6, objective: 'balanced' });
+    const res = LO.runSync(ctx, { timeBudgetMs: 800, seed: 20 });
+    check('optimizer returns valid candidates under maxBands=6', res.results.length > 0);
+    const allWithinMax = res.results.every((r) => {
+      const tot = r.groups.reduce((sum, g) => sum + g.m, 0);
+      return tot <= 6;
+    });
+    check('all candidates strictly respect maxBands budget (sum m <= 6)', allWithinMax);
+  }
+
+  // C: Locked group preservation & remaining band budget allocation
+  {
+    const groups = [
+      { type: 'tri', locked: true, n: 2, m: 3, pts: [{ link: 1, a: 3, b: 0 }, { link: 2, a: 5, b: 0 }, { link: 4, a: 0, b: 1 }] },
+      { type: 'tri', locked: false, allowed: st2, n: 1, m: 1, pts: [] }
+    ];
+    const ctx = LO.createContext(m, groups, band, { maxWraps: 2, maxBands: 8, objective: 'balanced' });
+    const res = LO.runSync(ctx, { timeBudgetMs: 800, seed: 30 });
+    check('locked group optimizer preserves budget (free group m <= 8-3=5)', res.results.every((r) => r.groups[0].m <= 5));
+  }
+
+  // D: Directional objective responsiveness (bottom vs top assist)
+  {
+    const groups = [
+      { type: 'tri', locked: false, allowed: st1, n: 1, m: 1, pts: [] },
+      { type: 'tri', locked: false, allowed: st2, n: 1, m: 1, pts: [] }
+    ];
+    const ctxBot = LO.createContext(m, groups, band, { maxWraps: 2, maxBands: 12, objective: 'bottom' });
+    const resBot = LO.runSync(ctxBot, { timeBudgetMs: 1200, seed: 123 });
+    const evBot = LP.evaluate(m, resBot.results[0].groups, band, { designFrac: 0.5 }, 41);
+
+    const ctxTop = LO.createContext(m, groups, band, { maxWraps: 2, maxBands: 12, objective: 'top' });
+    const resTop = LO.runSync(ctxTop, { timeBudgetMs: 1200, seed: 123 });
+    const evTop = LP.evaluate(m, resTop.results[0].groups, band, { designFrac: 0.5 }, 41);
+
+    // Bottom assist should achieve lower residual net torque at bottom than top assist
+    check('bottom assist objective optimizes bottom liftoff torque (tau_bottom < tau_top)', evBot.netDesign[0] < evTop.netDesign[0]);
+    // Top assist should achieve lower residual net torque at top than bottom assist
+    check('top assist objective optimizes top scoring torque (tau_top < tau_bottom)', evTop.netDesign[40] < evBot.netDesign[40]);
+  }
+}
+
 console.log(fails ? `\n${fails} FAILED` : '\nall tests passed');
 process.exit(fails ? 1 : 0);

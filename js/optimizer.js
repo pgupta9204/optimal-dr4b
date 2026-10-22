@@ -34,7 +34,15 @@
   }
 
   function createContext(model, groups, band, opts) {
+    opts = opts || {};
     const K = opts.K || 48;
+    const obj = opts.objective || 'balanced';
+    const maxTotalBands = Math.max(1, parseInt(opts.maxBands) || 10);
+    const maxW = Math.max(1, Math.min(3, parseInt(opts.maxWraps) || 2));
+    const avoidCross = opts.avoidCross !== false;
+    const designFrac = opts.designFrac !== undefined ? opts.designFrac : 0.5;
+    const bias = Number.isFinite(opts.bias) ? opts.bias : 0.0;
+
     const cfg = model.cfg;
     const thetas = LP.linspace(cfg.thetaMin * LP.DEG, cfg.thetaMax * LP.DEG, K);
     const NL = model.links.length;
@@ -50,7 +58,7 @@
         FR[o + 4] = f.xx; FR[o + 5] = f.xy; FR[o + 6] = f.yx; FR[o + 7] = f.yy; FR[o + 8] = f.rot;
       });
       const g = LP.gravityTorque(model, F);
-      tg[k] = g.struct + opts.designFrac * g.payload;
+      tg[k] = g.struct + designFrac * g.payload;
       const flat = [];
       for (const s of LP.linkSegments(model, F)) flat.push(s.li, s.x0, s.y0, s.x1, s.y1, Math.hypot(s.x1 - s.x0, s.y1 - s.y0) || 1);
       SEGS.push(Float64Array.from(flat));
@@ -59,6 +67,24 @@
     let S = 0;
     for (let k = 0; k < K; k++) S += tg[k] * tg[k];
     S = Math.sqrt(S / K) || 1;
+
+    // Angle weighting based on optimization objective
+    const angleWeights = new Float64Array(K);
+    for (let k = 0; k < K; k++) {
+      const alpha = k / (K - 1 || 1); // 0 at bottom/pickup (thetaMin), 1 at scoring/top (thetaMax)
+      if (obj === 'bottom') {
+        // Quadradic emphasis on lower 40% of stroke (pickup)
+        angleWeights[k] = 1.0 + 3.0 * (1 - alpha) * (1 - alpha);
+      } else if (obj === 'top') {
+        // Quadradic emphasis on upper 40% of stroke (scoring)
+        angleWeights[k] = 1.0 + 3.0 * alpha * alpha;
+      } else {
+        // Balanced: uniform weighting across full stroke
+        angleWeights[k] = 1.0;
+      }
+    }
+    let sumW = 0;
+    for (let k = 0; k < K; k++) sumW += angleWeights[k];
 
     const T = LP.makeTension(band);
     const sides = cfg.mass.sides;
@@ -81,7 +107,8 @@
       const np = type === 'line' ? 2 : 3;
       const mult = type === 'line' ? 2 : 1;
       let over = 0, under = 0, sepV = 0, lamMax = 0, lamMin = Infinity, crossN = 0;
-      const avoid = opts.avoidCross;
+      if (n > maxW) over += 20.0 * (n - maxW);
+
       for (let k = 0; k < K; k++) {
         for (let i = 0; i < np; i++) {
           const p = pts[i];
@@ -106,7 +133,7 @@
           if (d > 1e-9) dP += (ex * (pdx[i] - pdx[j]) + ey * (pdy[i] - pdy[j])) / d;
         }
         P *= mult; dP *= mult;
-        if (avoid) {
+        if (avoidCross) {
           const sg = SEGS[k];
           let hit = false;
           for (let e = 0; e < ne && !hit; e++) {
@@ -140,7 +167,8 @@
         if (ms < opts.minSep) sepV = Math.max(sepV, opts.minSep - ms);
         outVec[k] = sides * n * T(lam) * dP;
       }
-      return { pen: 2 * over + 2 * under + 2 * sepV + (1.5 * crossN) / K, lamMax, lamMin };
+      const crossPen = avoidCross && crossN > 0 ? 30.0 * (crossN / K) : 0;
+      return { pen: 2 * over + 2 * under + 2 * sepV + crossPen, lamMax, lamMin, crossFrac: crossN / K };
     }
 
     // locked groups contribute a fixed torque
@@ -148,23 +176,39 @@
     const lockedIdx = [], freeIdx = [];
     groups.forEach((g, gi) => (g.locked ? lockedIdx : freeIdx).push(gi));
     let lockedPen = 0;
-    for (let k = 0; k < K; k++) base[k] = (1 - opts.bias) * tg[k];
+    for (let k = 0; k < K; k++) base[k] = (1 - bias) * tg[k];
     const tmp = new Float64Array(K);
+    let lockedBands = 0;
     for (const gi of lockedIdx) {
       const g = groups[gi];
+      lockedBands += (g.m || 1);
       const pts = g.pts.map((p) => ({ li: p.link, ia: Math.round(p.a / G), ib: Math.round(p.b / G) }));
       const r = groupVec(g.type, pts, g.n, tmp);
       lockedPen += r.pen;
       for (let k = 0; k < K; k++) base[k] += g.m * tmp[k];
     }
+    const freeBandBudget = Math.max(freeIdx.length, maxTotalBands - lockedBands);
 
     function metric(e) {
       let ss = 0, mx = 0;
-      for (let k = 0; k < K; k++) { const v = e[k]; ss += v * v; const a = Math.abs(v); if (a > mx) mx = a; }
-      const rms = Math.sqrt(ss / K);
-      if (opts.objective === 'rms') return rms / S;
-      if (opts.objective === 'max') return mx / S;
-      return (0.5 * (rms + mx)) / S;
+      for (let k = 0; k < K; k++) {
+        const w = angleWeights[k];
+        let v = e[k];
+        if (obj === 'bottom') {
+          const alpha = k / (K - 1 || 1);
+          if (alpha < 0.4 && v > 0) v *= 1.5; // penalize under-assist at bottom
+        } else if (obj === 'top') {
+          const alpha = k / (K - 1 || 1);
+          if (alpha > 0.6 && v > 0) v *= 1.5; // penalize under-assist at top
+        }
+        ss += w * v * v;
+        const a = Math.abs(v);
+        if (a > mx) mx = a;
+      }
+      const rms = Math.sqrt(ss / sumW);
+      if (obj === 'rms') return rms / S;
+      if (obj === 'max') return mx / S;
+      return (0.6 * rms + 0.4 * mx) / S;
     }
 
     const vecs = freeIdx.map(() => new Float64Array(K));
@@ -180,14 +224,21 @@
     }
 
     function solveCounts() {
-      const nG = vecs.length, M = opts.maxBands;
+      const nG = vecs.length;
       if (nG === 0) return { ms: [], c: metric(base) };
+      const budget = freeBandBudget;
+      const maxPerGroup = Math.max(1, budget - (nG - 1));
+
       if (nG === 1) {
         let best = Infinity, bm = 1;
-        for (let m = 1; m <= M; m++) { const c = costFor([m]); if (c < best) { best = c; bm = m; } }
+        for (let m = 1; m <= budget; m++) {
+          const c = costFor([m]);
+          if (c < best) { best = c; bm = m; }
+        }
         return { ms: [bm], c: best };
       }
-      // least-squares seed, then integer coordinate descent
+
+      // least-squares seed, then integer coordinate descent respecting total budget
       const A = [], rhs = [];
       for (let i = 0; i < nG; i++) {
         A.push(new Array(nG).fill(0)); rhs.push(0);
@@ -196,17 +247,50 @@
         A[i][i] += 1e-9 + 1e-6 * A[i][i];
       }
       const x = gauss(A, rhs);
-      let ms = x.map((v) => Math.min(M, Math.max(1, Math.round(isFinite(v) ? v : 1))));
+      let ms = x.map((v) => Math.max(1, Math.min(maxPerGroup, Math.round(isFinite(v) ? v : 1))));
+      let sumM = ms.reduce((a, b) => a + b, 0);
+      while (sumM > budget) {
+        let maxJ = 0;
+        for (let j = 1; j < nG; j++) if (ms[j] > ms[maxJ]) maxJ = j;
+        if (ms[maxJ] <= 1) break;
+        ms[maxJ]--;
+        sumM--;
+      }
+
       let c = costFor(ms);
-      for (let pass = 0; pass < 6; pass++) {
+      for (let pass = 0; pass < 8; pass++) {
         let improved = false;
+        // Step +/- 1 or 2 on individual groups while respecting sum <= budget
         for (let j = 0; j < nG; j++) {
           for (const d of [-1, 1, -2, 2]) {
             const v = ms[j] + d;
-            if (v < 1 || v > M) continue;
-            const t = ms.slice(); t[j] = v;
+            if (v < 1 || v > maxPerGroup) continue;
+            const newSum = sumM - ms[j] + v;
+            if (newSum > budget) continue;
+            const t = ms.slice();
+            t[j] = v;
             const ct = costFor(t);
-            if (ct < c - 1e-12) { c = ct; ms = t; improved = true; }
+            if (ct < c - 1e-12) {
+              c = ct;
+              ms = t;
+              sumM = newSum;
+              improved = true;
+            }
+          }
+        }
+        // Balance / shift bands between groups
+        for (let i = 0; i < nG; i++) {
+          for (let j = 0; j < nG; j++) {
+            if (i === j || ms[i] <= 1 || ms[j] >= maxPerGroup) continue;
+            const t = ms.slice();
+            t[i]--;
+            t[j]++;
+            const ct = costFor(t);
+            if (ct < c - 1e-12) {
+              c = ct;
+              ms = t;
+              improved = true;
+            }
           }
         }
         if (!improved) break;
@@ -231,6 +315,7 @@
 
     return {
       K, thetas, S, ranges, freeIdx, lockedIdx, midF, groups, model, evalState, metric, base, opts,
+      maxW, maxTotalBands, freeBandBudget,
     };
   }
 
@@ -266,7 +351,7 @@
     const rnd = mulberry32(seed);
     const ri = (lo, hi) => lo + Math.floor(rnd() * (hi - lo + 1));
     const { groups, freeIdx, ranges, opts } = ctx;
-    const maxW = opts.maxWraps || 2;
+    const maxW = Math.max(1, Math.min(3, parseInt(opts.maxWraps) || ctx.maxW || 2));
     let evals = 0, restarts = 0, cancelled = false;
     const top = [];
 
@@ -288,6 +373,7 @@
       return { li, ia: ri(r.aMin, r.aMax), ib: ri(r.bMin, r.bMax) };
     }
     function validGroup(g) {
+      if (!g || g.n < 1 || g.n > maxW) return false;
       const set = new Set(g.pts.map((p) => p.li));
       if (set.size < 2) return false;
       const keys = new Set(g.pts.map((p) => p.li + ',' + p.ia + ',' + p.ib));
@@ -356,7 +442,7 @@
     function apply(s, mv) {
       const t = cloneState(s);
       const [j, i, v] = mv;
-      if (i < 0) t[j].n = v; else t[j].pts[i] = v;
+      if (i < 0) t[j].n = Math.min(maxW, Math.max(1, v)); else t[j].pts[i] = v;
       return t;
     }
     function shuffle(a) {
@@ -406,7 +492,9 @@
     }
 
     function oneRestart() {
-      let s = initial && restarts === 0 ? cloneState(initial) : randomState();
+      let s = initial && restarts === 0
+        ? cloneState(initial).map((g) => ({ ...g, n: Math.min(maxW, Math.max(1, g.n)) }))
+        : randomState();
       let cur = evalS(s);
       [s, cur] = climb(s, cur);
       record(s, cur);
