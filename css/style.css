@@ -625,6 +625,68 @@ input[type="range"]::-webkit-slider-thumb {
   background: rgba(2, 132, 199, 0.15);
 }
 
+.scenario-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.scenario-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: ui-monospace, monospace;
+}
+
+.tag-assist {
+  background: rgba(56, 189, 248, 0.16);
+  color: #38bdf8;
+}
+
+.tag-posts {
+  background: rgba(148, 163, 184, 0.14);
+  color: #cbd5e1;
+}
+
+.tag-clean {
+  background: rgba(16, 185, 129, 0.18);
+  color: #34d399;
+}
+
+.tag-warn {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+}
+
+.btn-clear-groups {
+  color: var(--text-muted);
+}
+
+.btn-clear-groups:hover {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.5);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.empty-groups-hint {
+  background: var(--bg-input);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.5;
+}
+
+.empty-groups-hint strong {
+  color: var(--text-main);
+}
+
 /* VEX Build Guide Callouts */
 .build-step {
   background: var(--bg-input);

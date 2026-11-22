@@ -175,7 +175,7 @@
     const base = new Float64Array(K); // e = base + sum m_g b_g
     const lockedIdx = [], freeIdx = [];
     groups.forEach((g, gi) => (g.locked ? lockedIdx : freeIdx).push(gi));
-    let lockedPen = 0;
+    let lockedPen = 0, lockedCross = 0;
     for (let k = 0; k < K; k++) base[k] = (1 - bias) * tg[k];
     const tmp = new Float64Array(K);
     let lockedBands = 0;
@@ -185,6 +185,7 @@
       const pts = g.pts.map((p) => ({ li: p.link, ia: Math.round(p.a / G), ib: Math.round(p.b / G) }));
       const r = groupVec(g.type, pts, g.n, tmp);
       lockedPen += r.pen;
+      lockedCross = Math.max(lockedCross, r.crossFrac || 0);
       for (let k = 0; k < K; k++) base[k] += g.m * tmp[k];
     }
     const freeBandBudget = Math.max(freeIdx.length, maxTotalBands - lockedBands);
@@ -300,17 +301,18 @@
 
     /** state: [{pts:[{li,ia,ib}], n}] aligned with freeIdx */
     function evalState(state) {
-      let pen = lockedPen, lamMax = 0, lamMin = Infinity;
+      let pen = lockedPen, lamMax = 0, lamMin = Infinity, maxCross = lockedCross;
       for (let j = 0; j < state.length; j++) {
         const g = groups[freeIdx[j]];
         const r = groupVec(g.type, state[j].pts, state[j].n, vecs[j]);
         pen += r.pen; lamMax = Math.max(lamMax, r.lamMax); lamMin = Math.min(lamMin, r.lamMin);
+        maxCross = Math.max(maxCross, r.crossFrac || 0);
       }
       const { ms, c } = solveCounts();
       let tie = 0;
       for (let j = 0; j < state.length; j++) tie += 0.0015 * ms[j] + 0.001 * (state[j].n - 1);
       // tiny preference for posts that are not at the extreme of the allowed range
-      return { cost: c + pen + tie, fit: c, pen, ms, lamMax, lamMin };
+      return { cost: c + pen + tie, fit: c, pen, ms, lamMax, lamMin, crossFrac: maxCross };
     }
 
     return {
@@ -526,9 +528,14 @@
         evals, restarts,
         results: top.map((t) => ({
           cost: t.cost, fit: t.fit, pen: t.pen, lamMax: t.lamMax, lamMin: t.lamMin,
+          crossFrac: t.crossFrac || 0,
           groups: t.state.map((g, j) => ({
-            gi: freeIdx[j], n: g.n, m: t.ms[j],
+            gi: freeIdx[j],
+            type: groups[freeIdx[j]].type,
+            n: g.n,
+            m: t.ms[j],
             pts: g.pts.map((p) => ({ link: p.li, a: p.ia * LP.GRID, b: p.ib * LP.GRID })),
+            allowed: groups[freeIdx[j]].allowed,
           })),
         })),
       };
@@ -557,5 +564,389 @@
     return result;
   }
 
-  root.LiftOptimizer = { createContext, run, runSync, mulberry32 };
+  // ------------------------------------------------------------------
+  // Multi-Scenario Explorer (Approach A: Tournament + Successive Halving)
+  // ------------------------------------------------------------------
+
+  function buildScenarioCatalog(model, opts) {
+    const maxTotalBands = Math.max(1, parseInt(opts && opts.maxBands) || 10);
+    const cloneGroup = (type, allowed) => ({ type, locked: false, n: 1, m: 1, pts: [], allowed });
+    const scenarios = [];
+
+    if (model.hasS2) {
+      const s1Links = model.links.filter((l) => l.stage <= 1 || l.name === 'Middle tower').map((l) => l.idx);
+      const s2Links = model.links.filter((l) => l.stage === 2 || l.name === 'Middle tower').map((l) => l.idx);
+
+      scenarios.push(
+        { id: 's1_line', name: '1-Grp: S1 Line (2-pt)', short: 'S1 Line', groupCount: 1, postCount: 2, exact: true, groups: [cloneGroup('line', s1Links)] },
+        { id: 's1_tri', name: '1-Grp: S1 Triangle (3-pt)', short: 'S1 Tri', groupCount: 1, postCount: 3, exact: false, groups: [cloneGroup('tri', s1Links)] },
+        { id: 's2_line', name: '1-Grp: S2 Line (2-pt)', short: 'S2 Line', groupCount: 1, postCount: 2, exact: true, groups: [cloneGroup('line', s2Links)] },
+        { id: 's2_tri', name: '1-Grp: S2 Triangle (3-pt)', short: 'S2 Tri', groupCount: 1, postCount: 3, exact: false, groups: [cloneGroup('tri', s2Links)] }
+      );
+
+      if (maxTotalBands >= 2) {
+        scenarios.push(
+          { id: 's1_line_s2_line', name: '2-Grp: S1 Line + S2 Line', short: 'S1 Line + S2 Line', groupCount: 2, postCount: 4, exact: false, groups: [cloneGroup('line', s1Links), cloneGroup('line', s2Links)] },
+          { id: 's1_tri_s2_line', name: '2-Grp: S1 Tri + S2 Line', short: 'S1 Tri + S2 Line', groupCount: 2, postCount: 5, exact: false, groups: [cloneGroup('tri', s1Links), cloneGroup('line', s2Links)] },
+          { id: 's1_line_s2_tri', name: '2-Grp: S1 Line + S2 Tri', short: 'S1 Line + S2 Tri', groupCount: 2, postCount: 5, exact: false, groups: [cloneGroup('line', s1Links), cloneGroup('tri', s2Links)] },
+          { id: 's1_tri_s2_tri', name: '2-Grp: S1 Tri + S2 Tri', short: 'S1 Tri + S2 Tri', groupCount: 2, postCount: 6, exact: false, groups: [cloneGroup('tri', s1Links), cloneGroup('tri', s2Links)] },
+          { id: 's1_dual_tri', name: '2-Grp: Dual S1 Triangles', short: 'Dual S1 Tri', groupCount: 2, postCount: 6, exact: false, groups: [cloneGroup('tri', s1Links), cloneGroup('tri', s1Links)] },
+          { id: 's2_dual_tri', name: '2-Grp: Dual S2 Triangles', short: 'Dual S2 Tri', groupCount: 2, postCount: 6, exact: false, groups: [cloneGroup('tri', s2Links), cloneGroup('tri', s2Links)] }
+        );
+      }
+    } else {
+      const allLinks = model.links.map((l) => l.idx);
+      scenarios.push(
+        { id: 's1_line', name: '1-Grp: Linear (2-pt)', short: 'Linear', groupCount: 1, postCount: 2, exact: true, groups: [cloneGroup('line', allLinks)] },
+        { id: 's1_tri', name: '1-Grp: Triangle (3-pt)', short: 'Triangle', groupCount: 1, postCount: 3, exact: false, groups: [cloneGroup('tri', allLinks)] }
+      );
+
+      if (maxTotalBands >= 2) {
+        scenarios.push(
+          { id: 'dual_line', name: '2-Grp: Dual Linear', short: 'Dual Linear', groupCount: 2, postCount: 4, exact: false, groups: [cloneGroup('line', allLinks), cloneGroup('line', allLinks)] },
+          { id: 'tri_line', name: '2-Grp: Triangle + Linear', short: 'Tri + Linear', groupCount: 2, postCount: 5, exact: false, groups: [cloneGroup('tri', allLinks), cloneGroup('line', allLinks)] },
+          { id: 'dual_tri', name: '2-Grp: Dual Triangles', short: 'Dual Tri', groupCount: 2, postCount: 6, exact: false, groups: [cloneGroup('tri', allLinks), cloneGroup('tri', allLinks)] }
+        );
+      }
+    }
+
+    return scenarios;
+  }
+
+  /** Exhaustive exact grid search for 1-group 2-pt line scenarios */
+  function runExactLine(ctx, { onProgress, onDone, topN = 6 }) {
+    const { groups, freeIdx, ranges, opts, model } = ctx;
+    const g = groups[freeIdx[0]];
+    const maxW = Math.max(1, Math.min(3, parseInt(opts.maxWraps) || ctx.maxW || 2));
+    const allowed = g && g.allowed && g.allowed.length ? g.allowed : model.links.map((l) => l.idx);
+
+    const holes = [];
+    for (const li of allowed) {
+      const r = ranges[li];
+      const l = model.links[li];
+      for (let ia = r.aMin; ia <= r.aMax; ia++) {
+        for (let ib = r.bMin; ib <= r.bMax; ib++) {
+          if (!LP.isPivot(l, ia * LP.GRID, ib * LP.GRID)) {
+            holes.push({ li, ia, ib });
+          }
+        }
+      }
+    }
+
+    let cancelled = false;
+    let evals = 0;
+    const top = [];
+
+    function record(state, r) {
+      if (!isFinite(r.cost)) return;
+      const key = stateKey(state, r.ms);
+      if (top.some((t) => t.key === key)) return;
+      if (top.length >= topN && r.cost >= top[top.length - 1].cost) return;
+      top.push({ key, state: cloneState(state), ...r });
+      top.sort((a, b) => a.cost - b.cost);
+      if (top.length > topN) top.pop();
+    }
+
+    function finish() {
+      return {
+        evals,
+        restarts: 1,
+        results: top.map((t) => ({
+          cost: t.cost, fit: t.fit, pen: t.pen, lamMax: t.lamMax, lamMin: t.lamMin,
+          crossFrac: t.crossFrac || 0,
+          groups: t.state.map((sg, j) => ({
+            gi: freeIdx[j],
+            type: groups[freeIdx[j]].type,
+            n: sg.n,
+            m: t.ms[j],
+            pts: sg.pts.map((p) => ({ link: p.li, a: p.ia * LP.GRID, b: p.ib * LP.GRID })),
+            allowed: groups[freeIdx[j]].allowed,
+          })),
+        })),
+      };
+    }
+
+    if (holes.length < 2) {
+      setTimeout(() => { if (!cancelled && onDone) onDone(finish()); }, 0);
+      return { cancel() { cancelled = true; } };
+    }
+
+    let idx1 = 0, idx2 = 1;
+    const nHoles = holes.length;
+
+    function step() {
+      if (cancelled) return;
+      const sliceEnd = performance.now() + 25;
+      while (idx1 < nHoles - 1) {
+        const p1 = holes[idx1];
+        const p2 = holes[idx2];
+        if (p1.li !== p2.li) {
+          for (let n = 1; n <= maxW; n++) {
+            const state = [{ n, pts: [p1, p2] }];
+            evals++;
+            const r = ctx.evalState(state);
+            record(state, r);
+          }
+        }
+        idx2++;
+        if (idx2 >= nHoles) {
+          idx1++;
+          idx2 = idx1 + 1;
+        }
+        if (performance.now() >= sliceEnd) break;
+      }
+
+      const frac = nHoles > 1 ? Math.min(1, idx1 / (nHoles - 1)) : 1;
+      if (onProgress) onProgress({ frac, evals, restarts: 1, best: top[0] });
+      if (idx1 >= nHoles - 1) {
+        if (onDone) onDone(finish());
+      } else {
+        setTimeout(step, 0);
+      }
+    }
+
+    setTimeout(step, 0);
+    return { cancel() { cancelled = true; } };
+  }
+
+  /** Two-round Multi-Scenario Tournament (Round 1 Broad Screening + Round 2 Successive Halving) */
+  function exploreScenarios(model, band, opts, params) {
+    params = params || {};
+    const onProgress = params.onProgress;
+    const onDone = params.onDone;
+    const timeBudgetMs = Math.max(400, parseInt(params.timeBudgetMs) || 5000);
+    const seed = params.seed || 1;
+    const catalog = buildScenarioCatalog(model, opts);
+
+    // Order Round 1: run fast exact 1-group line searches first, then stochastic ILS searches
+    const exactCatalog = catalog.filter((s) => s.exact);
+    const searchCatalog = catalog.filter((s) => !s.exact);
+    const r1Order = exactCatalog.concat(searchCatalog);
+
+    const entries = catalog.map((def) => ({
+      def,
+      ctx: null,
+      evals: 0,
+      restarts: 0,
+      best: null,
+      polished: false,
+    }));
+    const entryById = new Map(entries.map((e) => [e.def.id, e]));
+
+    let cancelled = false;
+    let activeTask = null;
+    let totalEvals = 0;
+    let totalRestarts = 0;
+    const tStart = performance.now();
+    const r1TargetEnd = tStart + timeBudgetMs * 0.55;
+
+    let r1Idx = 0;
+    let perSearchMs = Math.max(150, Math.floor((timeBudgetMs * 0.50) / Math.max(1, searchCatalog.length)));
+    let exactDoneCount = 0;
+
+    let finalists = [];
+    let r2Idx = 0;
+    let perFinalistMs = 400;
+
+    function emitProgress(phase, scIdx, scCount, scName, subFrac, subEvals, subRestarts) {
+      if (!onProgress || cancelled) return;
+      const doneFrac = phase === 1
+        ? 0.55 * ((scIdx + subFrac) / Math.max(1, scCount))
+        : 0.55 + 0.45 * ((scIdx + subFrac) / Math.max(1, scCount));
+      onProgress({
+        phase,
+        totalPhases: 2,
+        scenarioIndex: Math.min(scCount, scIdx + 1),
+        scenarioCount: scCount,
+        scenarioName: scName,
+        frac: Math.min(0.99, doneFrac),
+        totalEvals: totalEvals + (subEvals || 0),
+        totalRestarts: totalRestarts + (subRestarts || 0),
+      });
+    }
+
+    function finishTournament() {
+      if (cancelled) return;
+      const results = [];
+      for (const e of entries) {
+        if (!e.best || !e.best.groups || e.best.groups.length === 0) continue;
+        const totalBands = e.best.groups.reduce((sum, g) => sum + (g.m || 1), 0);
+        results.push({
+          isScenario: true,
+          scenarioId: e.def.id,
+          scenarioName: e.def.name,
+          scenarioShort: e.def.short,
+          groupCount: e.def.groupCount,
+          postCount: e.def.postCount,
+          exact: e.def.exact,
+          restarts: e.restarts,
+          evals: e.evals,
+          polished: e.polished,
+          cost: e.best.cost,
+          fit: e.best.fit,
+          pen: e.best.pen,
+          lamMax: e.best.lamMax,
+          lamMin: e.best.lamMin,
+          crossFrac: e.best.crossFrac || 0,
+          totalBands,
+          groups: e.best.groups.map((g, gi) => ({
+            gi,
+            type: g.type || e.def.groups[gi].type,
+            n: g.n,
+            m: g.m,
+            pts: g.pts.map((p) => ({ ...p })),
+            allowed: g.allowed || e.def.groups[gi].allowed,
+          })),
+        });
+      }
+      results.sort((a, b) => a.cost - b.cost);
+      if (onDone) {
+        onDone({
+          evals: totalEvals,
+          restarts: totalRestarts,
+          scenariosTested: catalog.length,
+          results,
+        });
+      }
+    }
+
+    function runNextRound2() {
+      if (cancelled) return;
+      if (r2Idx >= finalists.length) {
+        finishTournament();
+        return;
+      }
+      const fin = finalists[r2Idx];
+      const initial = fin.best.groups.map((g) => ({
+        n: g.n,
+        pts: g.pts.map((p) => ({ li: p.link, ia: Math.round(p.a / LP.GRID), ib: Math.round(p.b / LP.GRID) })),
+      }));
+      activeTask = run(fin.ctx, {
+        timeBudgetMs: perFinalistMs,
+        seed: seed + 1000 + r2Idx * 97,
+        topN: 6,
+        initial,
+        onProgress: (p) => emitProgress(2, r2Idx, finalists.length, fin.def.name, p.frac, p.evals, p.restarts),
+        onDone: (res) => {
+          activeTask = null;
+          if (cancelled) return;
+          fin.evals += res.evals;
+          fin.restarts += res.restarts;
+          totalEvals += res.evals;
+          totalRestarts += res.restarts;
+          fin.polished = true;
+          if (res.results && res.results.length > 0 && res.results[0].cost < fin.best.cost) {
+            fin.best = res.results[0];
+          }
+          r2Idx++;
+          runNextRound2();
+        },
+      });
+    }
+
+    function startRound2() {
+      if (cancelled) return;
+      const nonExactValid = entries
+        .filter((e) => !e.def.exact && e.best && isFinite(e.best.cost))
+        .sort((a, b) => a.best.cost - b.best.cost);
+
+      finalists = nonExactValid.slice(0, 3);
+      if (finalists.length > 0 && !finalists.some((f) => f.def.groupCount === 1)) {
+        const bestSingle = nonExactValid.find((e) => e.def.groupCount === 1);
+        if (bestSingle) finalists.push(bestSingle);
+      }
+
+      if (finalists.length === 0) {
+        finishTournament();
+        return;
+      }
+
+      const remaining = Math.max(400, timeBudgetMs - (performance.now() - tStart));
+      perFinalistMs = Math.max(150, Math.floor(remaining / finalists.length));
+      r2Idx = 0;
+      runNextRound2();
+    }
+
+    function runNextRound1() {
+      if (cancelled) return;
+      if (r1Idx >= r1Order.length) {
+        startRound2();
+        return;
+      }
+
+      const def = r1Order[r1Idx];
+      const entry = entryById.get(def.id);
+      const groupsClone = def.groups.map((g) => ({ ...g, pts: [] }));
+      entry.ctx = createContext(model, groupsClone, band, opts);
+
+      if (def.exact) {
+        activeTask = runExactLine(entry.ctx, {
+          topN: 6,
+          onProgress: (p) => emitProgress(1, r1Idx, r1Order.length, def.name, p.frac, p.evals, p.restarts),
+          onDone: (res) => {
+            activeTask = null;
+            if (cancelled) return;
+            entry.evals += res.evals;
+            entry.restarts += res.restarts;
+            totalEvals += res.evals;
+            totalRestarts += res.restarts;
+            if (res.results && res.results.length > 0) entry.best = res.results[0];
+            exactDoneCount++;
+            if (exactDoneCount === exactCatalog.length && searchCatalog.length > 0) {
+              const remR1 = Math.max(0, r1TargetEnd - performance.now());
+              perSearchMs = Math.max(150, Math.floor(remR1 / searchCatalog.length));
+            }
+            r1Idx++;
+            runNextRound1();
+          },
+        });
+      } else {
+        activeTask = run(entry.ctx, {
+          timeBudgetMs: perSearchMs,
+          seed: seed + r1Idx * 37,
+          topN: 6,
+          onProgress: (p) => emitProgress(1, r1Idx, r1Order.length, def.name, p.frac, p.evals, p.restarts),
+          onDone: (res) => {
+            activeTask = null;
+            if (cancelled) return;
+            entry.evals += res.evals;
+            entry.restarts += res.restarts;
+            totalEvals += res.evals;
+            totalRestarts += res.restarts;
+            if (res.results && res.results.length > 0) entry.best = res.results[0];
+            r1Idx++;
+            runNextRound1();
+          },
+        });
+      }
+    }
+
+    setTimeout(runNextRound1, 0);
+    return {
+      cancel() {
+        cancelled = true;
+        if (activeTask) activeTask.cancel();
+      },
+    };
+  }
+
+  /** synchronous multi-scenario explorer (tests / node) */
+  function exploreScenariosSync(model, band, opts, params) {
+    let result = null;
+    const realSetTimeout = root.setTimeout;
+    const queue = [];
+    root.setTimeout = (fn) => queue.push(fn);
+    try {
+      exploreScenarios(model, band, opts, { ...params, onDone: (r) => (result = r) });
+      while (queue.length) queue.shift()();
+    } finally {
+      root.setTimeout = realSetTimeout;
+    }
+    return result;
+  }
+
+  root.LiftOptimizer = {
+    createContext, run, runSync, mulberry32,
+    buildScenarioCatalog, exploreScenarios, exploreScenariosSync,
+  };
 })(typeof window !== 'undefined' ? window : globalThis);

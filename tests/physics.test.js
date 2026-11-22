@@ -323,5 +323,78 @@ for (const s1 of [{ type: '4bar', L: 14, s: 3 }, { type: '6bar', L1: 7, L2: 7, s
   }
 }
 
+// 11) Multi-Scenario Explorer (Approach A)
+{
+  const dr64Cfg = {
+    stage1: { type: '6bar', L1: 7, L2: 7, s1: 2.5, s2: 2.5 },
+    stage2: { type: '4bar', L: 14, s: 3, h: 4.5 },
+    thetaMin: -25, thetaMax: 65,
+    mass: { barDensity: 0.0075, overhang: 0.5, sides: 2, middleTower: 0.45, midLink: 0.12, endEffector: 2.2, payload: 0.5 }
+  };
+  const m64 = LP.buildModel(dr64Cfg);
+  const singleCfg = {
+    stage1: { type: '4bar', L: 15, s: 3.5 },
+    stage2: { type: 'none' },
+    thetaMin: -30, thetaMax: 65,
+    mass: { barDensity: 0.0075, overhang: 0.5, sides: 2, middleTower: 0, midLink: 0, endEffector: 1.5, payload: 0.5 }
+  };
+  const mSingle = LP.buildModel(singleCfg);
+  const band = { ...LP.BAND_PRESETS['64'], postD: 0.25 };
+
+  // 1 & 2. Scenario catalog counts
+  check('buildScenarioCatalog DR6-4B maxBands=6 returns 10 scenarios', LO.buildScenarioCatalog(m64, { maxBands: 6 }).length === 10);
+  check('buildScenarioCatalog DR6-4B maxBands=1 returns 4 one-group scenarios', LO.buildScenarioCatalog(m64, { maxBands: 1 }).length === 4);
+  check('buildScenarioCatalog Single 4-Bar maxBands=6 returns 5 scenarios', LO.buildScenarioCatalog(mSingle, { maxBands: 6 }).length === 5);
+  check('buildScenarioCatalog Single 4-Bar maxBands=1 returns 2 one-group scenarios', LO.buildScenarioCatalog(mSingle, { maxBands: 1 }).length === 2);
+
+  // 3. exploreScenariosSync on DR6-4B with maxBands=3, maxWraps=1
+  const res3 = LO.exploreScenariosSync(m64, band, {
+    K: 40, designFrac: 0.5, objective: 'balanced', bias: 0, lamMax: 4.0, lamMin: 1.15,
+    requireTension: true, minSep: 0.5, maxBands: 3, maxWraps: 1, avoidCross: true, halfCut: true,
+  }, { timeBudgetMs: 900, seed: 42 });
+
+  const has1Grp = res3.results.some((r) => r.groupCount === 1);
+  const has2Grp = res3.results.some((r) => r.groupCount === 2);
+  const hasExactLine = res3.results.some((r) => r.exact === true);
+  check('exploreScenariosSync DR6-4B returns both 1-group and 2-group scenarios including exact linear', has1Grp && has2Grp && hasExactLine, `results=${res3.results.length}`);
+
+  const allCompliant3 = res3.results.every((r) => {
+    const sumM = r.groups.reduce((s, g) => s + g.m, 0);
+    if (sumM > 3) return false;
+    return r.groups.every((g) => {
+      if (g.n < 1 || g.n > 1) return false;
+      return g.pts.every((p) => {
+        const l = m64.links[p.link];
+        if (LP.isPivot(l, p.a, p.b)) return false;
+        if (l.kind === 'bar') return p.a >= 0 && p.a <= l.length && Math.abs(p.b) < 1e-6;
+        let hi = -Infinity;
+        for (const piv of l.pivots) hi = Math.max(hi, piv[1]);
+        return Math.abs(p.a) < 1e-6 && p.b >= 0 && p.b <= hi + 0.5;
+      });
+    });
+  });
+  check('exploreScenariosSync DR6-4B candidates all obey maxBands<=3, maxWraps=1, on-metal, >=1" pivot clearance', allCompliant3);
+
+  // 4. exploreScenariosSync on DR6-4B with maxBands=1, maxWraps=1
+  const res1 = LO.exploreScenariosSync(m64, band, {
+    K: 40, designFrac: 0.5, objective: 'balanced', bias: 0, lamMax: 4.0, lamMin: 1.15,
+    requireTension: true, minSep: 0.5, maxBands: 1, maxWraps: 1, avoidCross: true, halfCut: true,
+  }, { timeBudgetMs: 500, seed: 7 });
+  check('exploreScenariosSync DR6-4B maxBands=1 returns only 1-group m=1 n=1 candidates',
+    res1.results.length > 0 && res1.results.every((r) => r.groupCount === 1 && r.groups.reduce((s, g) => s + g.m, 0) === 1 && r.groups[0].n === 1));
+
+  // 5. exploreScenariosSync on Single 4-Bar with maxBands=6, maxWraps=2
+  const resSingle = LO.exploreScenariosSync(mSingle, band, {
+    K: 40, designFrac: 0.5, objective: 'balanced', bias: 0, lamMax: 4.0, lamMin: 1.15,
+    requireTension: true, minSep: 0.5, maxBands: 6, maxWraps: 2, avoidCross: true, halfCut: true,
+  }, { timeBudgetMs: 600, seed: 9 });
+  const bestSingle = resSingle.results[0];
+  const evSingle = LP.evaluate(mSingle, bestSingle.groups, band, { designFrac: 0.5 }, 41);
+  const maxGS = Math.max(...evSingle.gDesign.map(Math.abs));
+  const maxNetS = Math.max(...evSingle.netDesign.map(Math.abs));
+  check('exploreScenariosSync Single 4-Bar achieves >60% peak torque reduction',
+    maxNetS < 0.4 * maxGS, `unbanded ${maxGS.toFixed(1)} in·lbf → ${maxNetS.toFixed(1)} in·lbf (${bestSingle.scenarioName})`);
+}
+
 console.log(fails ? `\n${fails} FAILED` : '\nall tests passed');
 process.exit(fails ? 1 : 0);

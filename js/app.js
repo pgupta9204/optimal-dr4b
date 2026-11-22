@@ -184,7 +184,7 @@
 
     // Re-sync input fields with current dimensions
     syncInputsFromConfig();
-    renderBandGroups();
+    renderBandGroupsUI();
     updateBuildGuide();
     renderer.render();
   }
@@ -260,7 +260,10 @@
     document.getElementById('s2_type').value = currentConfig.stage2.type;
     toggleStage2Inputs();
     if (currentConfig.stage2.type !== 'none') {
-      setDimValue('s2_L', currentConfig.stage2.L || currentConfig.stage2.L1 || 14);
+      const s2Len = currentConfig.stage2.type === '6bar'
+        ? ((currentConfig.stage2.L1 || 7) + (currentConfig.stage2.L2 || 7))
+        : (currentConfig.stage2.L || 14);
+      setDimValue('s2_L', s2Len);
       setDimValue('s2_s', currentConfig.stage2.s || currentConfig.stage2.s1 || 3.0);
       setDimValue('s2_h', currentConfig.stage2.h || 4.5);
     }
@@ -529,6 +532,22 @@
     // Auto-optimizer button
     btnRunOptimizer.addEventListener('click', runOptimizer);
 
+    // Clear all band groups button
+    const btnClearGroups = document.getElementById('btnClearGroups');
+    if (btnClearGroups) {
+      btnClearGroups.addEventListener('click', () => {
+        if (optimizerTask) {
+          optimizerTask.cancel();
+          optimizerTask = null;
+          btnRunOptimizer.textContent = '🚀 RUN OPTIMIZER';
+          optimizerStatus.textContent = 'Cleared.';
+        }
+        bandGroups = [];
+        candidateList.innerHTML = '';
+        rebuildModel();
+      });
+    }
+
     // Add group button
     document.getElementById('btnAddGroup').addEventListener('click', () => {
       if (bandGroups.length >= 4) return;
@@ -641,6 +660,16 @@
     const container = document.getElementById('bandGroupsContainer');
     container.innerHTML = '';
 
+    if (bandGroups.length === 0) {
+      container.innerHTML = `
+        <div class="empty-groups-hint">
+          No rubber bands attached (showing unassisted gravity torque).<br>
+          Click <strong>+ Add Group</strong> to add bands manually, or run <strong>🚀 RUN OPTIMIZER</strong> with <em>Explore All Scenarios</em> to search from scratch.
+        </div>
+      `;
+      return;
+    }
+
     bandGroups.forEach((grp, gi) => {
       const card = document.createElement('div');
       card.className = 'group-card';
@@ -655,7 +684,7 @@
           <label style="display:flex;align-items:center;gap:4px;font-size:11px;margin:0;cursor:pointer;">
             <input type="checkbox" ${grp.locked ? 'checked' : ''} data-lock="${gi}"> Lock
           </label>
-          ${bandGroups.length > 1 ? `<button class="btn btn-outline btn-sm" style="padding:2px 6px;color:#f87171;" data-del="${gi}">✕</button>` : ''}
+          <button class="btn btn-outline btn-sm" style="padding:2px 6px;color:#f87171;" data-del="${gi}" title="Remove band group">✕</button>
         </div>
       `;
       card.appendChild(header);
@@ -737,7 +766,7 @@
     });
 
     // Wire up events
-    container.querySelectorAll('input[data-field], select[data-field]').forEach((el) => {
+    container.querySelectorAll('input[data-grp][data-field], select[data-grp][data-field]').forEach((el) => {
       el.addEventListener('change', (e) => {
         const gi = parseInt(e.target.getAttribute('data-grp'));
         const field = e.target.getAttribute('data-field');
@@ -833,15 +862,25 @@
     document.getElementById('valMotorLoad').innerHTML = `${curMotorLoad.toFixed(0)}% <span class="unit">stall</span> ${motorBadge}`;
     document.getElementById('valMotorLoadSub').textContent = `Peak motion: ${maxMotorLoad.toFixed(0)}% stall`;
 
-    document.getElementById('valStretch').textContent = isFinite(globalLamMin) ? `${globalLamMin.toFixed(2)}× – ${globalLamMax.toFixed(2)}×` : '—';
-    const stretchSub = globalLamMax > 4.0 ? '⚠️ High risk of snap' : globalLamMin < 1.05 ? '⚠️ Band goes slack' : '✓ Safe elastic range';
+    document.getElementById('valStretch').textContent = (bandGroups.length > 0 && isFinite(globalLamMin))
+      ? `${globalLamMin.toFixed(2)}× – ${globalLamMax.toFixed(2)}×`
+      : '—';
+    const stretchSub = (bandGroups.length === 0 || !isFinite(globalLamMin))
+      ? 'No bands attached'
+      : globalLamMax > 4.0
+        ? '⚠️ High risk of snap'
+        : globalLamMin < 1.05
+          ? '⚠️ Band goes slack'
+          : '✓ Safe elastic range';
     document.getElementById('valStretchSub').textContent = stretchSub;
 
     let totalBandsPerSide = 0;
     bandGroups.forEach((g) => (totalBandsPerSide += g.m));
     const totalBandsRobot = totalBandsPerSide * currentConfig.mass.sides;
     document.getElementById('valTotalBands').textContent = `${totalBandsRobot} bands`;
-    document.getElementById('valTotalBandsSub').textContent = `(${totalBandsPerSide} per side across ${bandGroups.length} groups)`;
+    document.getElementById('valTotalBandsSub').textContent = bandGroups.length === 0
+      ? '(0 per side — unassisted lift)'
+      : `(${totalBandsPerSide} per side across ${bandGroups.length} groups)`;
 
     // Draw Chart 1: Torque
     window.Charts.lineChart(chartTorqueCv, {
@@ -893,7 +932,7 @@
       cursorX: curDeg,
       yLabel: 'Stretch (λ)',
       yMin: 0.8,
-      yMax: Math.max(4.2, globalLamMax * 1.1),
+      yMax: isFinite(globalLamMax) ? Math.max(4.2, globalLamMax * 1.1) : 4.2,
       fmtY: (v) => v.toFixed(1) + '×',
     });
 
@@ -920,11 +959,21 @@
     }
 
     readConfigFromInputs();
-    const timeBudgetMs = parseInt(document.getElementById('opt_time').value) || 2500;
+    model = LP.buildModel(currentConfig);
+    validateBandGroups();
+
+    const timeBudgetMs = parseInt(document.getElementById('opt_time').value) || 5000;
     const objective = document.getElementById('opt_objective').value;
     const avoidCross = document.getElementById('opt_avoidCross').checked;
     const maxBands = parseInt(document.getElementById('opt_maxBands').value) || 10;
     const maxWraps = parseInt(document.getElementById('opt_maxWraps').value) || 2;
+    const modeEl = document.getElementById('opt_mode');
+    let optMode = modeEl ? modeEl.value : 'explore';
+
+    if (bandGroups.length === 0 && optMode === 'current') {
+      optMode = 'explore';
+      if (modeEl) modeEl.value = 'explore';
+    }
 
     const isHalfCut = renderer.options.halfCut !== false;
     const opts = {
@@ -942,6 +991,98 @@
       halfCut: isHalfCut,
     };
 
+    const seed = (Date.now() ^ (Math.random() * 0x10000)) & 0xffff;
+
+    if (optMode === 'explore') {
+      trackEvent('optimizer_started', {
+        mode: 'explore',
+        stage1: currentConfig.stage1.type,
+        stage2: currentConfig.stage2.type,
+        halfCut: isHalfCut,
+        budgetMs: timeBudgetMs,
+        objective: objective,
+        maxBands: maxBands,
+        maxWraps: maxWraps,
+        avoidCross: avoidCross
+      });
+
+      btnRunOptimizer.textContent = '⏹ CANCEL OPTIMIZER';
+      optimizerProgress.style.display = 'block';
+      optimizerProgressBar.style.width = '0%';
+      optimizerStatus.textContent = 'Screening all 1-group & 2-group banding scenarios...';
+      candidateList.innerHTML = '';
+      if (typeof optimizerProgress.scrollIntoView === 'function') {
+        optimizerProgress.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+
+      optimizerTask = LO.exploreScenarios(model, bandPreset, opts, {
+        timeBudgetMs,
+        seed,
+        onProgress: (p) => {
+          optimizerProgressBar.style.width = Math.round(p.frac * 100) + '%';
+          optimizerStatus.textContent = `Round ${p.phase}/${p.totalPhases} (${p.scenarioIndex}/${p.scenarioCount}): ${p.scenarioName} — ${p.totalEvals.toLocaleString()} evals...`;
+        },
+        onDone: (res) => {
+          optimizerTask = null;
+          btnRunOptimizer.textContent = '🚀 RUN OPTIMIZER';
+          optimizerProgressBar.style.width = '100%';
+          optimizerStatus.textContent = `Explored ${res.scenariosTested} scenarios (${res.restarts} restarts, ${res.evals.toLocaleString()} evals).`;
+
+          if (res.results && res.results.length > 0) {
+            res.results.forEach((cand) => {
+              const candGroups = cand.groups.map((cg) => ({
+                type: cg.type || (cg.pts.length === 2 ? 'line' : 'tri'),
+                locked: false,
+                n: cg.n,
+                m: cg.m,
+                pts: cg.pts.map((p) => ({ ...p })),
+              }));
+              const ev = LP.evaluate(model, candGroups, bandPreset, opts, 41);
+              const maxG = Math.max(...ev.gDesign.map(Math.abs));
+              const maxNet = Math.max(...ev.netDesign.map(Math.abs));
+              cand.maxG = maxG;
+              cand.maxNet = maxNet;
+              cand.reductionPct = maxG > 0 ? ((1 - maxNet / maxG) * 100) : 0;
+            });
+
+            const best = res.results[0];
+            trackEvent('optimizer_completed', {
+              mode: 'explore',
+              stage1: currentConfig.stage1.type,
+              stage2: currentConfig.stage2.type,
+              reduction_pct: Number((best.reductionPct || 0).toFixed(1)),
+              restarts: res.restarts,
+              evals: res.evals,
+              candidates_found: res.results.length,
+              best_scenario: best.scenarioId
+            });
+            displayCandidates(res.results, true);
+            applyCandidate(best);
+          } else {
+            optimizerStatus.textContent = 'No feasible scenario found with current constraints.';
+            trackEvent('optimizer_completed', {
+              mode: 'explore',
+              stage1: currentConfig.stage1.type,
+              stage2: currentConfig.stage2.type,
+              reduction_pct: 0,
+              restarts: res.restarts,
+              evals: res.evals,
+              candidates_found: 0
+            });
+          }
+        }
+      });
+      return;
+    }
+
+    // Optimize Current Groups Only mode
+    if (bandGroups.every((g) => g.locked)) {
+      optimizerProgress.style.display = 'block';
+      optimizerProgressBar.style.width = '0%';
+      optimizerStatus.textContent = 'All band groups are locked. Unlock a group or switch to Explore All Scenarios.';
+      return;
+    }
+
     // Partition allowed links for stages to keep banding localized
     bandGroups.forEach((g, gi) => {
       if (model.hasS2) {
@@ -958,6 +1099,7 @@
     const ctx = LO.createContext(model, bandGroups, bandPreset, opts);
 
     trackEvent('optimizer_started', {
+      mode: 'current',
       stage1: currentConfig.stage1.type,
       stage2: currentConfig.stage2.type,
       halfCut: isHalfCut,
@@ -973,6 +1115,9 @@
     optimizerProgressBar.style.width = '0%';
     optimizerStatus.textContent = 'Exploring VEX 0.5" grid configurations...';
     candidateList.innerHTML = '';
+    if (typeof optimizerProgress.scrollIntoView === 'function') {
+      optimizerProgress.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
 
     const initial = bandGroups.filter((g) => !g.locked).map((g) => ({
       n: Math.min(g.n, maxWraps),
@@ -981,7 +1126,7 @@
 
     optimizerTask = LO.run(ctx, {
       timeBudgetMs,
-      seed: Date.now() & 0xffff,
+      seed,
       topN: 6,
       initial,
       onProgress: (p) => {
@@ -995,33 +1140,39 @@
         optimizerStatus.textContent = `Completed! ${res.restarts} restarts, ${res.evals.toLocaleString()} evals.`;
 
         if (res.results && res.results.length > 0) {
-          const best = res.results[0];
-          // Construct candidate band groups combining locked groups and best result
-          const candidateBandGroups = bandGroups.map((g, gi) => {
-            const found = best.groups.find((bg) => bg.gi === gi);
-            if (found) {
-              return { ...g, n: found.n, m: found.m, pts: found.pts.map((p) => ({ ...p })) };
-            }
-            return g;
+          res.results.forEach((cand) => {
+            const candidateBandGroups = bandGroups.map((g, gi) => {
+              const found = cand.groups.find((bg) => bg.gi === gi);
+              if (found) {
+                return { ...g, n: found.n, m: found.m, pts: found.pts.map((p) => ({ ...p })) };
+              }
+              return g;
+            });
+            const ev = LP.evaluate(model, candidateBandGroups, bandPreset, opts, 41);
+            const maxG = Math.max(...ev.gDesign.map(Math.abs));
+            const maxNet = Math.max(...ev.netDesign.map(Math.abs));
+            cand.maxG = maxG;
+            cand.maxNet = maxNet;
+            cand.reductionPct = maxG > 0 ? ((1 - maxNet / maxG) * 100) : 0;
           });
-          const ev = LP.evaluate(model, candidateBandGroups, bandPreset, opts, 41);
-          const maxG = Math.max(...ev.gDesign.map(Math.abs));
-          const maxNet = Math.max(...ev.netDesign.map(Math.abs));
-          const redPct = maxG > 0 ? ((1 - maxNet / maxG) * 100) : 0;
+
+          const best = res.results[0];
           trackEvent('optimizer_completed', {
+            mode: 'current',
             stage1: currentConfig.stage1.type,
             stage2: currentConfig.stage2.type,
-            reduction_pct: Number(redPct.toFixed(1)),
+            reduction_pct: Number((best.reductionPct || 0).toFixed(1)),
             restarts: res.restarts,
             evals: res.evals,
             candidates_found: res.results.length
           });
-          displayCandidates(res.results);
+          displayCandidates(res.results, false);
           // Apply best immediately
-          applyCandidate(res.results[0]);
+          applyCandidate(best);
         } else {
           optimizerStatus.textContent = 'No feasible solution found with current constraints.';
           trackEvent('optimizer_completed', {
+            mode: 'current',
             stage1: currentConfig.stage1.type,
             stage2: currentConfig.stage2.type,
             reduction_pct: 0,
@@ -1034,8 +1185,10 @@
     });
   }
 
-  function displayCandidates(results) {
-    candidateList.innerHTML = '<div style="font-size:11px;font-weight:700;color:#94a3b8;margin-bottom:6px;">TOP GRID-SNAPPED DESIGNS:</div>';
+  function displayCandidates(results, isScenarioMode) {
+    candidateList.innerHTML = isScenarioMode
+      ? '<div style="font-size:11px;font-weight:700;color:#94a3b8;margin-bottom:6px;">BEST DESIGN PER SCENARIO:</div>'
+      : '<div style="font-size:11px;font-weight:700;color:#94a3b8;margin-bottom:6px;">TOP GRID-SNAPPED DESIGNS:</div>';
 
     const presetName = bandPreset.label ? bandPreset.label.split(' ')[0] : '#64';
 
@@ -1045,25 +1198,56 @@
 
       let totalM = 0;
       const parts = [];
-      cand.groups.forEach((g) => {
+      cand.groups.forEach((g, gIdx) => {
         totalM += g.m;
-        parts.push(`G${g.gi + 1}: ${g.m}×${g.n > 1 ? ` (${g.n}w)` : ''}`);
-      });
-      bandGroups.forEach((lg, lgi) => {
-        if (lg.locked) {
-          totalM += lg.m;
-          parts.push(`G${lgi + 1}(🔒): ${lg.m}×`);
+        const wrapTxt = g.n > 1 ? ` (${g.n}w)` : '';
+        if (isScenarioMode) {
+          const typeTxt = g.type === 'line' ? 'Line' : 'Tri';
+          parts.push(`G${gIdx + 1} (${typeTxt}): ${g.m}×${wrapTxt}`);
+        } else {
+          parts.push(`G${g.gi + 1}: ${g.m}×${wrapTxt}`);
         }
       });
+      if (!isScenarioMode) {
+        bandGroups.forEach((lg, lgi) => {
+          if (lg.locked) {
+            totalM += lg.m;
+            parts.push(`G${lgi + 1}(🔒): ${lg.m}×`);
+          }
+        });
+      }
       const bandSummary = parts.join(' | ');
+      const postCount = cand.postCount || cand.groups.reduce((s, g) => s + g.pts.length, 0);
+      const assistStr = Number.isFinite(cand.reductionPct)
+        ? `${Math.max(0, cand.reductionPct).toFixed(0)}% assist`
+        : `Score: ${(1 - cand.fit).toFixed(2)}`;
+      const crossTag = (cand.crossFrac || 0) > 0
+        ? '<span class="scenario-tag tag-warn">⚠ Crosses bar</span>'
+        : '<span class="scenario-tag tag-clean">✓ No crossing</span>';
 
-      card.innerHTML = `
-        <div>
-          <div style="font-weight:700;color:#fff;font-size:12px;">#${idx + 1} Best Fit <span style="color:#38bdf8;font-size:10px;">(Score: ${(1 - cand.fit).toFixed(2)})</span></div>
-          <div style="font-size:10px;color:#94a3b8;">${bandSummary} (${presetName}) | Total: ${totalM}/side | λ: ${cand.lamMin.toFixed(2)}–${cand.lamMax.toFixed(2)}</div>
-        </div>
-        <button class="btn btn-outline btn-sm">Apply</button>
-      `;
+      if (isScenarioMode) {
+        card.innerHTML = `
+          <div>
+            <div style="font-weight:700;color:#fff;font-size:12px;">#${idx + 1} ${cand.scenarioName}</div>
+            <div style="font-size:10px;color:#94a3b8;">${bandSummary} (${presetName}) | Total: ${totalM}/side</div>
+            <div class="scenario-tags">
+              <span class="scenario-tag tag-assist">${assistStr}</span>
+              <span class="scenario-tag tag-posts">${postCount} posts</span>
+              <span class="scenario-tag tag-posts">λ: ${cand.lamMin.toFixed(2)}–${cand.lamMax.toFixed(2)}</span>
+              ${crossTag}
+            </div>
+          </div>
+          <button class="btn btn-outline btn-sm">Apply</button>
+        `;
+      } else {
+        card.innerHTML = `
+          <div>
+            <div style="font-weight:700;color:#fff;font-size:12px;">#${idx + 1} Best Fit <span style="color:#38bdf8;font-size:10px;">(${assistStr})</span></div>
+            <div style="font-size:10px;color:#94a3b8;">${bandSummary} (${presetName}) | Total: ${totalM}/side | λ: ${cand.lamMin.toFixed(2)}–${cand.lamMax.toFixed(2)}</div>
+          </div>
+          <button class="btn btn-outline btn-sm">Apply</button>
+        `;
+      }
 
       card.addEventListener('click', () => {
         document.querySelectorAll('.candidate-card').forEach((c) => c.classList.remove('selected'));
@@ -1076,15 +1260,30 @@
   }
 
   function applyCandidate(cand) {
+    const peakTorque = Number.isFinite(cand.maxNet) ? cand.maxNet : (cand.peakTorque || 0);
     trackEvent('candidate_applied', {
-      peak_torque: cand.peakTorque ? Number(cand.peakTorque.toFixed(1)) : 0
+      peak_torque: Number(peakTorque.toFixed(1)),
+      mode: cand.isScenario ? 'scenario' : 'current',
+      scenario: cand.scenarioId || 'custom'
     });
-    cand.groups.forEach((cg) => {
-      const grp = bandGroups[cg.gi];
-      grp.n = cg.n;
-      grp.m = cg.m;
-      grp.pts = cg.pts.map((p) => ({ link: p.link, a: p.a, b: p.b }));
-    });
+    if (cand.isScenario) {
+      bandGroups = cand.groups.map((cg) => ({
+        type: cg.type || (cg.pts.length === 2 ? 'line' : 'tri'),
+        locked: false,
+        n: cg.n,
+        m: cg.m,
+        pts: cg.pts.map((p) => ({ link: p.link, a: p.a, b: p.b })),
+        allowed: cg.allowed ? cg.allowed.slice() : undefined,
+      }));
+    } else {
+      cand.groups.forEach((cg) => {
+        const grp = bandGroups[cg.gi];
+        if (!grp) return;
+        grp.n = cg.n;
+        grp.m = cg.m;
+        grp.pts = cg.pts.map((p) => ({ link: p.link, a: p.a, b: p.b }));
+      });
+    }
     rebuildModel();
   }
 
@@ -1093,6 +1292,11 @@
     const list = document.getElementById('buildSheetList');
     if (!list || !model) return;
     list.innerHTML = '';
+
+    if (bandGroups.length === 0) {
+      list.innerHTML = '<div class="empty-groups-hint">No rubber bands attached. Add a band group or run the Auto-Optimizer to generate pit assembly instructions.</div>';
+      return;
+    }
 
     const labels = ['A', 'B', 'C', 'D'];
     const isHalfCut = !!renderer.options.halfCut;
@@ -1243,8 +1447,9 @@
       motors: motorConfig,
       unit: currentUnit,
       optimizer: {
+        mode: document.getElementById('opt_mode') ? document.getElementById('opt_mode').value : 'explore',
         objective: document.getElementById('opt_objective') ? document.getElementById('opt_objective').value : 'balanced',
-        time: parseInt(document.getElementById('opt_time') ? document.getElementById('opt_time').value : 2500) || 2500,
+        time: parseInt(document.getElementById('opt_time') ? document.getElementById('opt_time').value : 5000) || 5000,
         maxBands: parseInt(document.getElementById('opt_maxBands') ? document.getElementById('opt_maxBands').value : 10) || 10,
         maxWraps: parseInt(document.getElementById('opt_maxWraps') ? document.getElementById('opt_maxWraps').value : 2) || 2,
         avoidCross: document.getElementById('opt_avoidCross') ? document.getElementById('opt_avoidCross').checked : true,
@@ -1267,7 +1472,7 @@
       }
       const data = JSON.parse(atob(b64));
       if (data.cfg) currentConfig = data.cfg;
-      if (data.bands) bandGroups = data.bands;
+      if (Array.isArray(data.bands)) bandGroups = data.bands;
       if (data.motors) motorConfig = data.motors;
       if (data.unit) {
         currentUnit = data.unit;
@@ -1280,6 +1485,10 @@
         });
       }
       if (data.optimizer) {
+        if (data.optimizer.mode) {
+          const el = document.getElementById('opt_mode');
+          if (el) el.value = data.optimizer.mode;
+        }
         if (data.optimizer.objective) {
           const el = document.getElementById('opt_objective');
           if (el) el.value = data.optimizer.objective;
@@ -1317,5 +1526,9 @@
   }
 
   // Run on startup
-  window.addEventListener('DOMContentLoaded', init);
+  if (document.readyState === 'loading') {
+    window.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
 })();

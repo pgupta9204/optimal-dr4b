@@ -259,7 +259,10 @@
 
         <div style="display:flex;align-items:center;justify-content:space-between;margin:12px 0 6px;">
           <h3 style="font-size:11px;text-transform:uppercase;color:var(--text-muted);font-weight:700;">Band Groups</h3>
-          <button class="btn btn-outline btn-sm" id="btnAddGroup">+ Add Group</button>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <button class="btn btn-outline btn-sm btn-clear-groups" id="btnClearGroups" title="Remove all band groups">🗑 Clear All</button>
+            <button class="btn btn-outline btn-sm" id="btnAddGroup">+ Add Group</button>
+          </div>
         </div>
         <div id="bandGroupsContainer"></div>
       </div>
@@ -267,6 +270,13 @@
       <!-- Auto-Optimizer Section -->
       <div class="sidebar-section">
         <h2>Auto-Optimizer</h2>
+        <div class="form-group">
+          <label>Search Mode</label>
+          <select id="opt_mode">
+            <option value="explore" selected>Explore All Scenarios (From Scratch)</option>
+            <option value="current">Optimize Current Groups Only</option>
+          </select>
+        </div>
         <div class="form-row">
           <div>
             <label>Optimization Goal</label>
@@ -279,9 +289,10 @@
           <div>
             <label>Compute Budget</label>
             <select id="opt_time">
-              <option value="2500">2.5s (Standard)</option>
-              <option value="1500">1.5s (Fast)</option>
-              <option value="5000">5.0s (Deep Search)</option>
+              <option value="2500">2.5s (Fast)</option>
+              <option value="5000" selected>5.0s (Standard)</option>
+              <option value="10000">10.0s (Thorough)</option>
+              <option value="15000">15.0s (Deep Search)</option>
             </select>
           </div>
         </div>
